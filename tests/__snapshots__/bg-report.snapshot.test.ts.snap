@@ -1,0 +1,171 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`report builders (frozen strings) > batch completion message + notify label 1`] = `
+"Background bash finished (2 jobs)
+
+job aaaaaa ($ sleep 60): exit 0
+log_path: /tmp/x.out
+\`\`\`
+line-1
+line-2
+\`\`\`
+
+job bbbbbb ($ pytest auth): exit 1
+log_path: /tmp/y.out
+\`\`\`
+boom
+\`\`\`"
+`;
+
+exports[`report builders (frozen strings) > batch completion message + notify label 2`] = `
+{
+  "command": undefined,
+  "exitCode": 1,
+  "jobId": undefined,
+  "jobs": [
+    {
+      "command": "sleep 60",
+      "displayName": "sleep 60",
+      "exitCode": 0,
+      "jobId": "aaaaaa",
+      "logPath": "/tmp/x.out",
+      "tail": "line-1
+line-2",
+    },
+    {
+      "command": "pytest auth",
+      "displayName": "auth tests",
+      "exitCode": 1,
+      "jobId": "bbbbbb",
+      "logPath": "/tmp/y.out",
+      "tail": "boom",
+    },
+  ],
+  "logPath": undefined,
+  "output": {
+    "empty": false,
+    "lines": [
+      {
+        "kind": "output",
+        "text": "Background bash finished (2 jobs)",
+      },
+      {
+        "kind": "output",
+        "text": "",
+      },
+      {
+        "kind": "output",
+        "text": "job aaaaaa ($ sleep 60): exit 0",
+      },
+      {
+        "kind": "output",
+        "text": "log_path: /tmp/x.out",
+      },
+      {
+        "kind": "output",
+        "text": "\`\`\`",
+      },
+      {
+        "kind": "output",
+        "text": "line-1",
+      },
+      {
+        "kind": "output",
+        "text": "line-2",
+      },
+      {
+        "kind": "output",
+        "text": "\`\`\`",
+      },
+      {
+        "kind": "output",
+        "text": "",
+      },
+      {
+        "kind": "output",
+        "text": "job bbbbbb ($ pytest auth): exit 1",
+      },
+      {
+        "kind": "output",
+        "text": "log_path: /tmp/y.out",
+      },
+      {
+        "kind": "output",
+        "text": "\`\`\`",
+      },
+      {
+        "kind": "output",
+        "text": "boom",
+      },
+      {
+        "kind": "output",
+        "text": "\`\`\`",
+      },
+    ],
+  },
+  "status": "failed",
+  "summary": "Background bash failed",
+  "v": 1,
+  "windowId": undefined,
+}
+`;
+
+exports[`report builders (frozen strings) > batch completion message + notify label 3`] = `
+{
+  "notifyLabel": "2 jobs: sleep 60, pytest auth",
+  "worst": 1,
+}
+`;
+
+exports[`report builders (frozen strings) > footer status line 1`] = `"1 background proc: sleep 60 · aaaaaa · 45s"`;
+
+exports[`report builders (frozen strings) > footer status line 2`] = `undefined`;
+
+exports[`report builders (frozen strings) > launch text 1`] = `
+"Started in background tmux window: sleep 60 @1.
+job_id: aaaaaa
+log_path: /tmp/x.out
+Result will be reported when it finishes.
+Follow up with /tasks aaaaaa or read /tmp/x.out."
+`;
+
+exports[`report builders (frozen strings) > shutdown warning 1`] = `undefined`;
+
+exports[`report builders (frozen strings) > shutdown warning 2`] = `"Stopped 1 background job on exit: sleep 60. Set shutdownPolicy "leave-running" to keep them next time."`;
+
+exports[`report builders (frozen strings) > shutdown warning 3`] = `"Stopped 4 background jobs on exit: a, b, c (+1 more). Set shutdownPolicy "leave-running" to keep them next time."`;
+
+exports[`report builders (frozen strings) > single completion (success, failed, empty) 1`] = `
+"Background bash finished
+job aaaaaa ($ sleep 60)
+log_path: /tmp/x.out
+
+\`\`\`
+line-1
+line-2
+\`\`\`"
+`;
+
+exports[`report builders (frozen strings) > single completion (success, failed, empty) 2`] = `
+"Background bash failed
+
+\`\`\`
+boom
+\`\`\`"
+`;
+
+exports[`report builders (frozen strings) > timeout text (ask + background variants) 1`] = `
+"partial out
+
+Still running after 30s in background tmux. Use tmux peek/list/kill to inspect or stop it. Result will be reported when it finishes.
+job_id: aaaaaa
+log_path: /tmp/x.out
+Your call: leave it running and the result will be reported when it finishes, or kill it now with /tasks aaaaaa."
+`;
+
+exports[`report builders (frozen strings) > timeout text (ask + background variants) 2`] = `
+"Still running after 30s in background tmux and polling every 10s. Result will be reported when it finishes.
+job_id: aaaaaa
+log_path: /tmp/x.out
+Follow up with /tasks aaaaaa or read /tmp/x.out."
+`;

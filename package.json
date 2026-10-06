@@ -1,0 +1,64 @@
+{
+  "name": "@amaksoft/pi-bg-shell",
+  "version": "0.1.0",
+  "description": "tmux-backed background shell execution for pi with Claude-Code-like UX",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "tmux",
+    "background",
+    "bash"
+  ],
+  "license": "MIT",
+  "author": "amaksoft",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amaksoft/pi-bg-shell.git"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/extension.ts"
+  },
+  "files": [
+    "src",
+    "LICENSE",
+    "CREDITS.md",
+    "NOTICE.md",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run --exclude '**/*.e2e.test.ts'",
+    "test:parity": "vitest --run tests/bg-parity.unit.test.ts"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1",
+    "zod": "^4.3.6"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.86.1",
+    "@earendil-works/pi-tui": "^0.86.1",
+    "@sinclair/typebox": "^0.34.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
+  }
+}
