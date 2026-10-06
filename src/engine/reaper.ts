@@ -176,6 +176,45 @@ const tombstoneJobCount = (spoolDir: string): number => {
 };
 
 /**
+ * Crash-window tmp sweep: atomicWriteJson stages `.tmp-*.json` beside its
+ * target, so a kill between create and rename orphans one. Only files
+ * matching our prefix AND older than the window go — a live write's tmp is
+ * seconds old. Files only, never directories; best-effort, never throws.
+ * Returns swept file paths.
+ */
+export const TMP_SWEEP_PREFIX = ".tmp-";
+export const TMP_SWEEP_AGE_MS = 3600000;
+export const sweepTmpFiles = (spoolRoot: string, olderThanMs = TMP_SWEEP_AGE_MS): string[] => {
+  const swept: string[] = [];
+  const cutoff = Date.now() - olderThanMs;
+  const walk = (dir: string): void => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.startsWith(TMP_SWEEP_PREFIX)) continue;
+      try {
+        if (statSync(full).mtimeMs > cutoff) continue;
+        unlinkSync(full);
+        swept.push(full);
+      } catch {
+        // Racy delete or perms — leave it for the next pass.
+      }
+    }
+  };
+  walk(spoolRoot);
+  return swept;
+};
+
+/**
  * Retention prune (contract: preservedOutputRetentionDays / maxPreservedOutputMb).
  * Only tombstoned dirs are eligible — a live or untombstoned dir is never
  * deleted, no matter its age. Oldest tombstones go first under the size cap.

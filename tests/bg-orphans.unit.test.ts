@@ -9,6 +9,7 @@ import { adoptOrphanDir, releaseAdoptedDirs, restoreAdoptedDirs, scanOrphanDirs 
 import { acquireOwnerLock } from "../src/engine/owner-lock";
 import { registerOrphansCommand } from "../src/tools/orphans-command";
 import { atomicWriteJson, type JobRecord, type SessionRecord } from "../src/engine/sidecar";
+import { TMP_SWEEP_AGE_MS, sweepTmpFiles } from "../src/engine/reaper";
 import type { Session } from "../src/engine/session";
 import { Reconciler } from "../src/engine/reconciler";
 import { killTask, listTasks, peekTask } from "../src/engine/wiring";
@@ -560,5 +561,27 @@ describe("janitor (headless)", () => {
     // Idempotent: stopping twice is safe.
     janitorStop(state, false);
     expect(state.engine).toBeNull();
+  });
+});
+
+describe("tmp sweep (headless)", () => {
+  it("reaps only stale .tmp- files, never live writes or real data", () => {
+    const root = freshRoot();
+    const stale = join(root, "sessions", "abc", "jobs");
+    mkdirSync(stale, { recursive: true });
+    const oldTmp = join(stale, ".tmp-1-2-3.json");
+    const freshTmp = join(stale, ".tmp-9-9-9.json");
+    const real = join(stale, "job.json");
+    writeFileSync(oldTmp, "{}");
+    writeFileSync(freshTmp, "{}");
+    writeFileSync(real, "{}");
+    writeFileSync(join(stale, ".tmp-notjson"), "{}");
+    const ancient = new Date(Date.now() - TMP_SWEEP_AGE_MS - 60000);
+    utimesSync(oldTmp, ancient, ancient);
+    const swept = sweepTmpFiles(join(root, "sessions"));
+    expect(swept).toEqual([oldTmp]);
+    expect(existsSync(oldTmp)).toBe(false);
+    expect(existsSync(freshTmp)).toBe(true);
+    expect(existsSync(real)).toBe(true);
   });
 });

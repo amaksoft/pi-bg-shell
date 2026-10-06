@@ -15,7 +15,7 @@ import { JobsWidget } from "./tools/jobs-widget";
 import { registerOrphansCommand } from "./tools/orphans-command";
 import { deliverCompletions, deliverPoll, deliverStall } from "./engine/wiring";
 import { janitorStart, janitorStop } from "./engine/janitor";
-import { defaultReaperProbes, pruneSpool, runReaper, sweepDeadSockets } from "./engine/reaper";
+import { defaultReaperProbes, pruneSpool, runReaper, sweepDeadSockets, sweepTmpFiles } from "./engine/reaper";
 
 /** Slow maintenance cadence: GC debris converges without restart spam. */
 const SLOW_TICK_MS = 300000;
@@ -102,6 +102,7 @@ export const tmuxBash = (input: TmuxBashOptions = {}) => {
               onSlowTick: () => {
                 try {
                   sweepDeadSockets(options.tmuxBinary);
+                  sweepTmpFiles(spoolRoot);
                   pruneSpool(
                     spoolRoot,
                     options.preservedOutputRetentionDays,

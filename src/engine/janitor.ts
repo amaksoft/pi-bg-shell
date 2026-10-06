@@ -3,7 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ResolvedOptions } from "../config";
 import type { ExtensionState } from "./types";
 import { releaseAdoptedDirs, restoreAdoptedDirs } from "./orphans";
-import { defaultReaperProbes, pruneSpool, runReaper, sweepDeadSockets } from "./reaper";
+import { defaultReaperProbes, pruneSpool, runReaper, sweepDeadSockets, sweepTmpFiles } from "./reaper";
 import { destroySession } from "./session";
 
 /**
@@ -26,10 +26,12 @@ export const janitorStart = (
     // Best-effort; /orphans lists anything left behind.
   }
   // Dead non-leave-running sessions (own + foreign dirs), retention prune,
-  // and orphaned socket files (triple-gated, best-effort).
+  // crash-window tmp sweep, and orphaned socket files (triple-gated,
+  // best-effort).
   try {
     runReaper(spoolRoot, options.ownerStaleAfterMs, defaultReaperProbes(options.tmuxBinary));
     pruneSpool(spoolRoot, options.preservedOutputRetentionDays, options.maxPreservedOutputMb);
+    sweepTmpFiles(spoolRoot);
     sweepDeadSockets(options.tmuxBinary);
   } catch {
     // Best-effort; lazy reaper-on-next-start covers nobody-home.
