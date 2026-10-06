@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -440,6 +440,24 @@ describe("spool symlink guard", () => {
       ).toThrow("must not be a symlink");
     } finally {
       unlinkSync(link);
+    }
+  });
+});
+
+describe("atomicWriteJson cross-device safety (headless)", () => {
+  it("never touches the OS tmpdir: survives a hostile TMPDIR", () => {
+    const root = mkdtempSync(join(tmpdir(), "bg-sidecar-"));
+    const saved = process.env.TMPDIR;
+    process.env.TMPDIR = join(root, "no-such-tmpdir");
+    try {
+      const target = join(root, "owner.json");
+      atomicWriteJson(target, { nonce: "abc" });
+      expect(readJsonFile<{ nonce: string }>(target)).toEqual({ nonce: "abc" });
+      // No stray tmp files left beside the target.
+      expect(readdirSync(root).sort()).toEqual(["owner.json"]);
+    } finally {
+      if (saved === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = saved;
     }
   });
 });

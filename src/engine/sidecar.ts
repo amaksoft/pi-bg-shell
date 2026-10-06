@@ -8,8 +8,7 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 /**
  * P0 (S2): crash-safe sidecar persistence. Every write is tmp+fsync+rename,
@@ -65,17 +64,29 @@ export interface DeathRecord {
   jobs: { jobId: string; lastState: string; exitFilePresent: boolean }[];
 }
 
-/** Atomic JSON write: tmp file in the OS tmpdir, fsync, rename over target. */
+/**
+ * Atomic JSON write: tmp file in the TARGET's dir, fsync, rename over target.
+ * The tmp file must live beside the target, never in the OS tmpdir: rename
+ * across filesystems throws EXDEV (spool on one mount, /tmp on another —
+ * the standard devserver layout), which wedged every setup at owner.json.
+ */
 export const atomicWriteJson = (targetPath: string, value: unknown): void => {
   const stamp = `${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-  const tmpPath = join(tmpdir(), `pi-bg-sidecar-${stamp}.json`);
+  const tmpPath = join(dirname(targetPath), `.tmp-${stamp}.json`);
   const fd = openSync(tmpPath, "w", 0o600);
   try {
     writeSync(fd, JSON.stringify(value, null, 2));
     fsyncSync(fd);
-  } finally {
+  } catch (error) {
     closeSync(fd);
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      // Best-effort; a stale dotfile harms nothing.
+    }
+    throw error;
   }
+  closeSync(fd);
   renameSync(tmpPath, targetPath);
 };
 
