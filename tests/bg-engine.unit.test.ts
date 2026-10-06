@@ -447,7 +447,7 @@ describe("no-engine error (headless)", () => {
     const pi = { sendMessage: vi.fn() } as unknown as ExtensionAPI;
     const ctx = { cwd: tmpdir() } as unknown as ExtensionContext;
     const result = await runBashJob(
-      { command: "echo hello", timeout: 10 },
+      { command: "echo hello", timeout: 10, timeoutAction: "background" },
       "tool-no-engine",
       undefined,
       undefined,
