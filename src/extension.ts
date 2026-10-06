@@ -137,10 +137,14 @@ export const tmuxBash = (input: TmuxBashOptions = {}) => {
           }
           // One-shot housekeeping (adopt, reap, prune, sweep).
           janitorStart(pi, state, options);
-        } catch {
+        } catch (error) {
           // Fail open: without a session there is no engine (busy-owner or
           // tmux failure); tools report it via requireTmux/engine absence.
-          console.log("[pi-bg-shell] engine unavailable; background jobs disabled this session.");
+          // The cause is logged, not swallowed: on boxes where setup throws
+          // (socket/tmp perms, stale locks) this line is the whole diagnosis.
+          console.log(
+            `[pi-bg-shell] engine unavailable; background jobs disabled this session: ${error}`,
+          );
         }
       }
       updateBackgroundProcessStatus(ctx, state, options);
