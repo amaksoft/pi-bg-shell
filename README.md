@@ -60,10 +60,12 @@ bun run check   # tsc --noEmit
 bun run test    # vitest, unit only (e2e excluded — needs bootable pi + tmux)
 ```
 
-Load locally without installing (from the package dir):
+Clone and load locally without installing:
 
 ```bash
-cd ~/exper/pi-bg-shell
+git clone https://github.com/amaksoft/pi-bg-shell.git
+cd pi-bg-shell
+bun install
 pi --no-extensions -e ./src/index.ts
 ```
 
