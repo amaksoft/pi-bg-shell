@@ -439,3 +439,25 @@ describe("window-id resolution (live)", () => {
     }
   }, 30000);
 });
+
+describe("no-engine error (headless)", () => {
+  it("reports the actionable tmux cause instead of the generic absence", async () => {
+    const state = createState(); // no engine wired
+    const badTmuxOptions = resolveOptions({ tmuxBinary: "definitely-not-tmux-xyz" });
+    const pi = { sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const ctx = { cwd: tmpdir() } as unknown as ExtensionContext;
+    const result = await runBashJob(
+      { command: "echo hello", timeout: 10 },
+      "tool-no-engine",
+      undefined,
+      undefined,
+      pi,
+      ctx,
+      state,
+      badTmuxOptions,
+    );
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("tmux not found");
+    expect(text).toContain("Install tmux >= 3.0");
+  });
+});

@@ -17,6 +17,7 @@ import {
   effectivePollInterval,
   notifyCompletion,
   pollCustomMessage,
+  requireTmux,
   sendPollMessageWhenIdle,
   tmuxWindowNameForCommand,
   toolError,
@@ -194,7 +195,13 @@ export const runBashJob = async (
   options: ResolvedOptions,
 ) => {
   const owned = engineOf(state);
-  if (!owned) return toolError("Error: engine session unavailable.");
+  if (!owned) {
+    // Prefer the actionable cause (missing/old tmux) over the generic
+    // absence: on boxes without tmux this is the whole diagnosis.
+    return toolError(
+      requireTmux(state, options) ?? "Error: engine session unavailable.",
+    );
+  }
   const begun = beginJobRun(input, toolCallId, state, options, owned, ctx);
   if (!begun.ok) return begun.result;
   const run = begun.run;
