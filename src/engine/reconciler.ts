@@ -540,7 +540,23 @@ export class Reconciler {
     this.checkStall(record, snapshot);
     // Interim poll path (best-effort): due check + new-bytes slice.
     const now = Date.now();
-    const cursor = this.cursors.get(key) ?? { lastPollAt: 0, offset: 0 };
+    // Resume from the journaled offset when present: in-memory cursors die
+    // with the process, and restarting from zero would replay the whole
+    // scrollback as "new" output (stale polls for long-dead context).
+    const cursor = this.cursors.get(key) ?? {
+      lastPollAt: 0,
+      offset: record.pollOffset ?? 0,
+    };
+    // Latched (read/killed) rows: the outcome is already surfaced, so
+    // interim polls for them are pure noise. Swallow the backlog (persist
+    // the offset too) so it can never redeliver as a stale replay later.
+    if (record.seen === true) {
+      const seenSize = fileSize(record.spoolLog);
+      const seenOffset = seenSize ?? cursor.offset;
+      this.cursors.set(key, { lastPollAt: now, offset: seenOffset });
+      this.persistPollOffset(spoolDir, record, seenOffset);
+      return { kind: "pending" };
+    }
     if (now - cursor.lastPollAt < this.options.minimumPollIntervalSeconds * 1000)
       return { kind: "pending" };
     const size = fileSize(record.spoolLog);
@@ -550,8 +566,23 @@ export class Reconciler {
     }
     const newText = readByteSlice(record.spoolLog, cursor.offset, size);
     this.cursors.set(key, { lastPollAt: now, offset: size });
+    this.persistPollOffset(spoolDir, record, size);
     if (newText.trim().length > 0) this.callbacks.onPoll(snapshot, newText);
     return { kind: "pending" };
+  }
+
+  /**
+   * Persist the delivered poll offset so restarts resume instead of
+   * replaying. Best-effort and write-gated (no journal churn when the
+   * offset is unchanged) — the tick must never break on bookkeeping.
+   */
+  private persistPollOffset(spoolDir: string, record: JobRecord, offset: number): void {
+    if (record.pollOffset === offset) return;
+    try {
+      atomicWriteJson(jobJsonPath(spoolDir, record.jobId), { ...record, pollOffset: offset });
+    } catch {
+      // Best-effort; the in-memory cursor still guards this process.
+    }
   }
 
   /**

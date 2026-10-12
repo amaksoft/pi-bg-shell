@@ -7,6 +7,7 @@ import { ensureSession, type Runner, type Session } from "../src/engine/session"
 import {
   clearAllForegroundClaims,
   clearForegroundClaim,
+  markJobNotified,
   setForegroundClaim,
   spawnJob,
 } from "../src/engine/jobs";
@@ -687,6 +688,100 @@ describe("shared tick (headless)", () => {
       expect(polls).toEqual(["cc0003"]);
     } finally {
       recon.stop();
+    }
+  });
+});
+
+describe("stale poll suppression (headless)", () => {
+  const fakeSession = (root: string, id: string): Session => {
+    const spoolDir = join(root, id);
+    mkdirSync(join(spoolDir, "jobs"), { recursive: true });
+    return {
+      piId: id,
+      spoolDir,
+      sessionName: `pi-bg-${id}`,
+      socketName: `pi-bg-sock-${id}`,
+      sessionGuid: `guid-${id}`,
+      ownerNonce: `nonce-${id}`,
+      epoch: 0,
+    };
+  };
+
+  const writeRunning = (session: Session, jobId: string, log: string): void => {
+    const logFile = join(session.spoolDir, `${jobId}.out`);
+    writeFileSync(logFile, log);
+    atomicWriteJson(join(session.spoolDir, "jobs", `${jobId}.json`), {
+      jobId,
+      windowId: "@1",
+      command: `cmd-${jobId}`,
+      startedAt: Date.now(),
+      spoolLog: logFile,
+      exitFile: join(session.spoolDir, "jobs", `${jobId}.exit`),
+      foregroundClaim: false,
+      status: "running",
+      seen: false,
+    });
+  };
+
+  const opts = {
+    tickMs: 50,
+    minimumPollIntervalSeconds: 0,
+    completionTailBytes: 8000,
+  };
+
+  it("latched (seen) rows never poll, even as the log grows", () => {
+    const root = freshRoot();
+    const session = fakeSession(root, "seen");
+    writeRunning(session, "dd0004", "hello\n");
+    const polls: string[] = [];
+    const recon = new Reconciler(
+      session,
+      { onCompletions: () => {}, onPoll: (job) => void polls.push(job.jobId) },
+      opts,
+    );
+    try {
+      recon.tick();
+      expect(polls).toEqual(["dd0004"]);
+      // Latch the outcome (peek/kill path) and grow the log afterwards.
+      markJobNotified(session, "dd0004");
+      writeFileSync(join(session.spoolDir, "dd0004.out"), "hello\nmore\n");
+      recon.tick();
+      recon.tick();
+      expect(polls).toEqual(["dd0004"]); // swallowed, never replayed
+      // Backlog swallowed into the journaled offset.
+      const record = readJsonFile<JobRecord>(jobJsonPath(session.spoolDir, "dd0004"));
+      expect(record?.pollOffset).toBe("hello\nmore\n".length);
+    } finally {
+      recon.stop();
+    }
+  });
+
+  it("restarts resume from the journaled offset instead of replaying scrollback", () => {
+    const root = freshRoot();
+    const session = fakeSession(root, "resume");
+    writeRunning(session, "ee0005", "hello\n");
+    const polls: string[] = [];
+    const callbacks = {
+      onCompletions: () => {},
+      onPoll: (job: JobSnapshot, text: string) => void polls.push(`${job.jobId}:${text}`),
+    };
+    const recon1 = new Reconciler(session, callbacks, opts);
+    try {
+      recon1.tick();
+      expect(polls).toEqual(["ee0005:hello\n"]);
+    } finally {
+      recon1.stop();
+    }
+    // Fresh process, same spool dir: pre-existing scrollback is not new.
+    const recon2 = new Reconciler(session, callbacks, opts);
+    try {
+      recon2.tick();
+      expect(polls).toEqual(["ee0005:hello\n"]); // no replay
+      writeFileSync(join(session.spoolDir, "ee0005.out"), "hello\nmore\n");
+      recon2.tick();
+      expect(polls).toEqual(["ee0005:hello\n", "ee0005:more\n"]); // only new bytes
+    } finally {
+      recon2.stop();
     }
   });
 });

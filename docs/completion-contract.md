@@ -114,6 +114,12 @@ interim-output contract — anything the model must not miss lives there.
 Standalone `poll`/`unpoll`/`list-polls` tool actions are retired (the tick
 owns interim output); their schema entries are removed.
 
+Poll suppression: no poll fires for journal-latched (`seen`) rows — a peeked
+or deliberately killed job's outcome is already surfaced, so further interim
+slices would only produce stale replays. The delivered byte offset persists
+in the journal (`pollOffset`): restarts resume from it instead of replaying
+pre-existing scrollback as "new" output.
+
 ## Kill semantics (stable)
 
 - `tmux kill` (job ID or window ID) and `/tasks` kill **suppress the completion

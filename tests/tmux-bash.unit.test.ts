@@ -17,8 +17,9 @@ import {
   renderBashCallText,
   renderBashResultText,
 } from "../src/render";
-import { formatEnvironmentExportsForBash } from "../src/tmux-utils";
+import { formatEnvironmentExportsForBash, headLine } from "../src/tmux-utils";
 import { tmuxWindowAttachCommand } from "../src/tmux-utils";
+import { pollCustomMessage } from "../src/runtime";
 
 type FormatOutputCase = {
   name: string;
@@ -571,6 +572,56 @@ Took 5.0s`);
         "tmux poll: poll-fit @1065\n\n $ printf 'hello\\n'\n hello\n\n Attach with: tmux switch-client -t @1065",
       );
     });
+
+    it("leads poll summaries with the opaque job id when known", () => {
+      const options = resolveOptions({ outputDir: "/tmp/bg-poll-jobid" });
+      const message = pollCustomMessage(
+        {
+          id: "@1065",
+          index: 0,
+          title: "printf hello",
+          active: false,
+          displayCommand: "printf 'hello\\n'",
+          jobId: "a1b2c3",
+        },
+        formatTmuxOutputForContext("hello"),
+        options,
+      );
+      const details = (message as { details: { summary: string } }).details;
+      expect(details.summary).toBe("tmux poll: job a1b2c3 ($ printf hello)");
+      expect(details.summary).not.toContain("@1065");
+    });
+
+    it("keeps the @id summary for windows without job identity", () => {
+      const options = resolveOptions({ outputDir: "/tmp/bg-poll-noid" });
+      const message = pollCustomMessage(
+        { id: "@1065", index: 0, title: "poll-fit", active: false },
+        formatTmuxOutputForContext("hello"),
+        options,
+      );
+      const details = (message as { details: { summary: string } }).details;
+      expect(details.summary).toBe("tmux poll: poll-fit @1065");
+    });
+  });
+});
+
+describe("headLine", () => {
+  it("passes short titles through", () => {
+    expect(headLine("echo hi", 60)).toBe("echo hi");
+  });
+
+  it("cuts at a word boundary, never mid-token", () => {
+    const full = "cd ~/fbsource/users/am/amaksoft/ios_sim/sim && python3 -c \"import ast\" && echo done";
+    const title = headLine(full, 60);
+    expect(title.endsWith("…")).toBe(true);
+    const kept = title.replace(/…$/, "");
+    expect(full.startsWith(kept)).toBe(true);
+    // The cut lands on whitespace: no partial token leaks into the title.
+    expect(full[kept.length]).toBe(" ");
+  });
+
+  it("hard-cuts a single overlong token", () => {
+    expect(headLine("a".repeat(100), 60)).toBe(`${"a".repeat(60)}…`);
   });
 });
 

@@ -13,6 +13,19 @@ export const execSafe = (cmd: string): string | null => {
 /** Single-quote a value for safe embedding in a shell command line. */
 export const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
 
+/**
+ * Truncate a one-line title to max chars at a word boundary (never mid-token:
+ * poll titles cut mid-command read as gibberish, e.g. `python3 -c "i @3822`).
+ * Falls back to a hard cut when the first token alone exceeds max.
+ */
+export const headLine = (value: string, max: number): string => {
+  const line = value.split("\n")[0];
+  if (line.length <= max) return line;
+  const cut = line.slice(0, max);
+  const boundary = cut.lastIndexOf(" ");
+  return (boundary > max / 2 ? cut.slice(0, boundary) : cut) + "…";
+};
+
 /** Names that may be exported into a tmux-spawned shell environment. */
 const isExportableName = (name: string, denylist: ReadonlySet<string>): boolean =>
   SHELL_IDENTIFIER_REGEX.test(name) && !denylist.has(name);

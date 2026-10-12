@@ -35,7 +35,7 @@ import {
 } from "./report";
 import { resolveDisplayName } from "./grammar";
 import type { BashInput } from "../tool-call-schemas";
-import { getWindows } from "../tmux-utils";
+import { getWindows, headLine } from "../tmux-utils";
 import { readByteSlice, readTailLines } from "./log-tail";
 import { consumeCompletion, killGuarded, markJobNotified, peekJob, spawnJob, waitJob } from "./jobs";
 import { jobJsonPath } from "./naming";
@@ -617,7 +617,7 @@ export const deliverPoll = (
     {
       id: snapshot.windowId,
       index: 0,
-      title: snapshot.command.split("\n")[0].slice(0, 60) || snapshot.windowId,
+      title: headLine(snapshot.command, 60) || snapshot.windowId,
       active: false,
       displayCommand: snapshot.command,
       outputFile: snapshot.logFile,

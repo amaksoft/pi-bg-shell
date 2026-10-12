@@ -141,7 +141,11 @@ const pollDetails = (
   options: ResolvedOptions,
   socketName?: string,
 ): PollMessageRenderDetails => ({
-  summary: `tmux poll: ${window.title} ${window.id}`,
+  // Job-led identity when known (opaque job_id, like completions); raw @ids
+  // are engine internals and must not lead user-visible rows.
+  summary: window.jobId
+    ? `tmux poll: job ${window.jobId} ($ ${window.title})`
+    : `tmux poll: ${window.title} ${window.id}`,
   command: `$ ${window.displayCommand ?? window.title}`,
   output: output.details.render,
   attachLines: [

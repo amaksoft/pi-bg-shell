@@ -55,6 +55,14 @@ export interface JobRecord {
    * suppressing the pending completion ping. Survives restarts.
    */
   seen: boolean;
+  /**
+   * Poll cursor (journal-durable): spool-log byte offset already delivered
+   * as interim polls. A fresh watcher starts from the persisted offset so
+   * restarts/rebuilds never replay pre-existing scrollback as "new" output
+   * (the stale-poll replays the model otherwise has to narrate). Absent
+   * means first sighting: deliver from the top once, then persist.
+   */
+  pollOffset?: number;
 }
 
 export interface DeathRecord {
