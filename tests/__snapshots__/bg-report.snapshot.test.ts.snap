@@ -112,7 +112,7 @@ line-2",
 
 exports[`report builders (frozen strings) > batch completion message + notify label 3`] = `
 {
-  "notifyLabel": "2 jobs: sleep 60, pytest auth",
+  "notifyLabel": "Bash(Ran 2 shell commands) — Exit 1",
   "worst": 1,
 }
 `;

@@ -33,7 +33,15 @@ import {
   timeoutBackgroundHint,
   type BatchBlock,
 } from "./report";
-import { resolveDisplayName } from "./grammar";
+import {
+  batchVerdictText,
+  collapsedCompletionText,
+  countOutputLines,
+  displayNameOf,
+  resolveDisplayName,
+  singleSummary,
+  verdictText,
+} from "./grammar";
 import type { BashInput } from "../tool-call-schemas";
 import { getWindows, headLine } from "../tmux-utils";
 import { readByteSlice, readTailLines } from "./log-tail";
@@ -515,6 +523,16 @@ export const deliverCompletion = (
   });
   // Singleton completions steer mid-turn (patty-bg-tasks parity): the agent
   // reacts between tool calls instead of waiting for the next turn.
+  // The toast mirrors the collapsed transcript block in plain words, so the
+  // ping never carries information the expandable row below it doesn't have.
+  const toastName = displayNameOf(
+    job?.command,
+    job ? resolveDisplayName(job.command, job.name) : undefined,
+  );
+  const toastLabel = collapsedCompletionText(
+    singleSummary(toastName, job?.jobId),
+    verdictText(exitCode, countOutputLines(output.details.render.lines)),
+  );
   pi.sendMessage(
     completionCustomMessage(exitCode, output, {
       job,
@@ -522,7 +540,7 @@ export const deliverCompletion = (
     }),
     { triggerTurn: true, deliverAs: "steer" },
   );
-  notifyCompletion(state, options, exitCode, job?.command);
+  notifyCompletion(state, options, exitCode, toastLabel);
   teardownCompleted(state, options, snapshot.jobId);
   owned.widget?.noteFinished(snapshot.jobId, snapshot.command, exitCode, Date.now() - snapshot.startedAt);
   owned.widget?.poke();

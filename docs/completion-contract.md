@@ -20,10 +20,11 @@ Multi-job batches keep one combined follow-up turn:
 pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" });
 ```
 
-and (unless `notifyOnCompletion: false`) one toast per batch:
+and (unless `notifyOnCompletion: false`) one toast per batch, mirroring the
+collapsed block in plain words (no chrome — toasts render no components):
 
 ```ts
-ctx.ui.notify("Background bash finished: <command>", "info" | "error");
+ctx.ui.notify("Bash(Ran 1 shell command: <name> · job <id>) — Done (N lines)", "info" | "error");
 ```
 
 One producer, one shape: the single shared tick peeks exit files,

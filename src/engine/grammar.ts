@@ -51,6 +51,27 @@ export const verdictSegments = (exitCode: number, lineCount: number): Segment[] 
       ]
     : [{ text: `Exit ${exitCode}`, tone: "error" }];
 
+/** Plain-text verdict mirror (toasts carry no tones): `Done (N lines)` / `Exit N`. */
+export const verdictText = (exitCode: number, lineCount: number): string =>
+  exitCode === 0 ? `Done (${lineCount} lines)` : `Exit ${exitCode}`;
+
+/** Plain-text batch verdict mirror (jobs aggregated, no line count). */
+export const batchVerdictText = (exitCode: number): string =>
+  exitCode === 0 ? "Done" : `Exit ${exitCode}`;
+
+/** Content output lines (claudify parity: blank lines carry no content). */
+export const countOutputLines = (lines: readonly { kind: string; text: string }[]): number =>
+  lines.filter((line) => line.kind === "output" && line.text.trim().length > 0).length;
+
+/**
+ * Collapsed completion in plain words (toast text): the block header +
+ * verdict with no chrome, e.g. `Bash(Ran 1 shell command: <name> · job <id>) — Done (2 lines)`.
+ * Toasts render no components, so this mirrors the collapsed block exactly:
+ * what the toast shows is always expandable below it in the transcript.
+ */
+export const collapsedCompletionText = (summary: string, verdict: string): string =>
+  `Bash(${summary}) — ${verdict}`;
+
 /** Claudify-exact collapsed hint: muted, keyboard-only, no click text. */
 export const expandHintSegments = (): Segment[] => [{ text: " (ctrl+o to expand)", tone: "muted" }];
 

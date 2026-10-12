@@ -20,6 +20,14 @@ import {
 import { formatEnvironmentExportsForBash, headLine } from "../src/tmux-utils";
 import { tmuxWindowAttachCommand } from "../src/tmux-utils";
 import { pollCustomMessage } from "../src/runtime";
+import {
+  batchSummary,
+  batchVerdictText,
+  collapsedCompletionText,
+  countOutputLines,
+  singleSummary,
+  verdictText,
+} from "../src/engine/grammar";
 
 type FormatOutputCase = {
   name: string;
@@ -622,6 +630,40 @@ describe("headLine", () => {
 
   it("hard-cuts a single overlong token", () => {
     expect(headLine("a".repeat(100), 60)).toBe(`${"a".repeat(60)}…`);
+  });
+});
+
+describe("collapsed completion text (toast mirrors the block)", () => {
+  it("names the job, not the raw command", () => {
+    expect(
+      collapsedCompletionText(singleSummary("classmiss-check", "beb8e9"), verdictText(0, 2)),
+    ).toBe("Bash(Ran 1 shell command: classmiss-check · job beb8e9) — Done (2 lines)");
+  });
+
+  it("renders failures without a line count", () => {
+    expect(
+      collapsedCompletionText(singleSummary("pytest auth", "a1b2c3"), verdictText(5, 9)),
+    ).toBe("Bash(Ran 1 shell command: pytest auth · job a1b2c3) — Exit 5");
+  });
+
+  it("aggregates batches without line counts", () => {
+    expect(
+      collapsedCompletionText(batchSummary(2), batchVerdictText(1)),
+    ).toBe("Bash(Ran 2 shell commands) — Exit 1");
+    expect(
+      collapsedCompletionText(batchSummary(3), batchVerdictText(0)),
+    ).toBe("Bash(Ran 3 shell commands) — Done");
+  });
+
+  it("counts only non-blank output lines", () => {
+    expect(
+      countOutputLines([
+        { kind: "output", text: "hello" },
+        { kind: "output", text: "   " },
+        { kind: "notice", text: "truncated" },
+        { kind: "output", text: "world" },
+      ]),
+    ).toBe(2);
   });
 });
 

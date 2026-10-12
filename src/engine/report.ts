@@ -8,7 +8,7 @@ import {
   type CompletionMessageRenderDetails,
   type FormattedOutput,
 } from "../render";
-import { resolveDisplayName } from "./grammar";
+import { batchSummary, batchVerdictText, collapsedCompletionText, resolveDisplayName } from "./grammar";
 import type { BackgroundJob } from "./types";
 
 // --- Job naming -----------------------------------------------------------
@@ -130,7 +130,7 @@ export const buildBatchCompletion = (
     },
     display: true,
   };
-  const notifyLabel = `${blocks.length} jobs: ${blocks.map((b) => b.command.split("\n")[0].slice(0, 40)).join(", ")}`;
+  const notifyLabel = collapsedCompletionText(batchSummary(blocks.length), batchVerdictText(worst));
   return { message, notifyLabel, worst };
 };
 

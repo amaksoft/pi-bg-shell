@@ -15,7 +15,6 @@ import type { Reconciler } from "./engine/reconciler";
 import type { Runner, Session } from "./engine/session";
 import {
   displayCommandForCommand,
-  formatCompletionSummary,
   formatRenderedBashResult,
   indentDisplayLine,
   indentDisplayLines,
@@ -179,13 +178,13 @@ export const notifyCompletion = (
   state: ExtensionState,
   options: ResolvedOptions,
   exitCode: number,
-  command?: string,
+  label: string,
 ): void => {
   if (!options.notifyOnCompletion) return;
   try {
-    const label = command
-      ? `${formatCompletionSummary(exitCode)}: ${command.slice(0, 80)}`
-      : formatCompletionSummary(exitCode);
+    // The label mirrors the collapsed transcript block in plain words
+    // (collapsedCompletionText): the toast never carries information the
+    // block below it doesn't have expandable.
     state.statusContext?.ui.notify(label, exitCode === 0 ? "info" : "error");
   } catch {
     // Notifications must never break completion delivery.
