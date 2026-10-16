@@ -102,6 +102,9 @@ crash; a missing/old tmux fails every call with an actionable message).
 
 - `Not in scope / no longer running` → the window closed; check transcript + log.
 - `No background session` → start a new bash command to create one.
+- Killed tmux server/session (`tmux kill-server`, crash) → the engine recreates
+  it in place under the same identity on the next turn or spawn; no restart
+  needed. Jobs that died with the server stay listed until killed via `/tasks`.
 - E2E suites need a bootable pi + tmux (rewrite pending).
 - `/tasks` lists shell jobs; task-tracker items live in the pi-tasks widget.
   Subagent rows are not merged (separate stores, deliberate).

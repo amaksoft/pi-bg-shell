@@ -13,7 +13,7 @@ import {
 import { registerMessageRenderers } from "./renderers/messages";
 import { JobsWidget } from "./tools/jobs-widget";
 import { registerOrphansCommand } from "./tools/orphans-command";
-import { deliverCompletions, deliverPoll, deliverStall } from "./engine/wiring";
+import { deliverCompletions, deliverPoll, deliverStall, healEngineSessions } from "./engine/wiring";
 import { janitorStart, janitorStop } from "./engine/janitor";
 import { defaultReaperProbes, pruneSpool, runReaper, sweepDeadSockets, sweepTmpFiles } from "./engine/reaper";
 
@@ -59,99 +59,131 @@ export const tmuxBash = (input: TmuxBashOptions = {}) => {
     };
     const spoolRoot = join(options.outputDir, "sessions");
 
+    // Engine bootstrap, shared by session_start and turn_start retry: create
+    // the 1:1 session, start the reconciler tick, attach the widget, run the
+    // one-shot janitor. Returns true on success. Fail-open (false) leaves
+    // tools reporting via requireTmux/engine absence.
+    type WidgetUi = Parameters<JobsWidget["attach"]>[0];
+    const startEngine = (piId: string, ui: WidgetUi): boolean => {
+      try {
+        const session = ensureSession({
+          piId,
+          spoolRoot,
+          shutdownPolicy: options.shutdownPolicy,
+          staleAfterMs: options.ownerStaleAfterMs,
+          runner,
+        });
+        const next = new Reconciler(
+          session,
+          {
+            onCompletions: (items) => {
+              try {
+                deliverCompletions(pi, state, options, items);
+              } catch (error) {
+                console.log(`[pi-bg-shell] delivery failed for ${items.length} job(s): ${error}`);
+              }
+            },
+            onPoll: (job, newText) => {
+              try {
+                deliverPoll(pi, state, options, job, newText);
+              } catch {
+                // Interim polls are best-effort; never break the tick.
+              }
+            },
+            onStall: (job, tail) => {
+              try {
+                deliverStall(pi, state, options, job, tail);
+              } catch {
+                // Stall warnings are best-effort; never break the tick.
+              }
+            },
+            // Continuous GC: a long-running session converges socket
+            // debris, retention backlog, and dead sessions without
+            // waiting for the next restart. Same trio as janitorStart.
+            onSlowTick: () => {
+              try {
+                sweepDeadSockets(options.tmuxBinary);
+                sweepTmpFiles(spoolRoot);
+                pruneSpool(
+                  spoolRoot,
+                  options.preservedOutputRetentionDays,
+                  options.maxPreservedOutputMb,
+                );
+                runReaper(
+                  spoolRoot,
+                  options.ownerStaleAfterMs,
+                  defaultReaperProbes(options.tmuxBinary),
+                );
+              } catch {
+                // Best-effort GC must never break the tick.
+              }
+            },
+          },
+          {
+            tickMs: 1000,
+            minimumPollIntervalSeconds: options.minimumPollIntervalSeconds,
+            completionTailBytes: 8000,
+            stallPromptThresholdMs: options.stallPromptThresholdSeconds * 1000,
+            slowTickMs: SLOW_TICK_MS,
+          },
+          session.ownerNonce,
+        );
+        next.start();
+        reconciler = next;
+        state.engine = { session, runner, reconciler, widget };
+        if (widget) {
+          try {
+            widget.attach(ui);
+          } catch {
+            // Presentation only: a widget failure must never break the session.
+          }
+        }
+        // One-shot housekeeping (adopt, reap, prune, sweep).
+        janitorStart(pi, state, options);
+        return true;
+      } catch (error) {
+        // Fail open: without a session there is no engine (busy-owner or
+        // tmux failure); tools report it via requireTmux/engine absence.
+        // The cause is logged, not swallowed: on boxes where setup throws
+        // (socket/tmp perms, stale locks) this line is the whole diagnosis.
+        console.log(
+          `[pi-bg-shell] engine unavailable; background jobs disabled this session: ${error}`,
+        );
+        return false;
+      }
+    };
+
     pi.on("session_start", async (_event, ctx) => {
       state.tmuxReady = checkTmuxReadiness(options);
       const piId = ctx.sessionManager.getSessionId();
       state.statusContext = ctx;
       if (state.tmuxReady.ok) {
-        try {
-          const session = ensureSession({
-            piId,
-            spoolRoot,
-            shutdownPolicy: options.shutdownPolicy,
-            staleAfterMs: options.ownerStaleAfterMs,
-            runner,
-          });
-          reconciler = new Reconciler(
-            session,
-            {
-              onCompletions: (items) => {
-                try {
-                  deliverCompletions(pi, state, options, items);
-                } catch (error) {
-                  console.log(`[pi-bg-shell] delivery failed for ${items.length} job(s): ${error}`);
-                }
-              },
-              onPoll: (job, newText) => {
-                try {
-                  deliverPoll(pi, state, options, job, newText);
-                } catch {
-                  // Interim polls are best-effort; never break the tick.
-                }
-              },
-              onStall: (job, tail) => {
-                try {
-                  deliverStall(pi, state, options, job, tail);
-                } catch {
-                  // Stall warnings are best-effort; never break the tick.
-                }
-              },
-              // Continuous GC: a long-running session converges socket
-              // debris, retention backlog, and dead sessions without
-              // waiting for the next restart. Same trio as janitorStart.
-              onSlowTick: () => {
-                try {
-                  sweepDeadSockets(options.tmuxBinary);
-                  sweepTmpFiles(spoolRoot);
-                  pruneSpool(
-                    spoolRoot,
-                    options.preservedOutputRetentionDays,
-                    options.maxPreservedOutputMb,
-                  );
-                  runReaper(
-                    spoolRoot,
-                    options.ownerStaleAfterMs,
-                    defaultReaperProbes(options.tmuxBinary),
-                  );
-                } catch {
-                  // Best-effort GC must never break the tick.
-                }
-              },
-            },
-            {
-              tickMs: 1000,
-              minimumPollIntervalSeconds: options.minimumPollIntervalSeconds,
-              completionTailBytes: 8000,
-              stallPromptThresholdMs: options.stallPromptThresholdSeconds * 1000,
-              slowTickMs: SLOW_TICK_MS,
-            },
-            session.ownerNonce,
-          );
-          reconciler.start();
-          state.engine = { session, runner, reconciler, widget };
-          if (widget) {
-            try {
-              widget.attach(ctx.ui);
-            } catch {
-              // Presentation only: a widget failure must never break the session.
-            }
-          }
-          // One-shot housekeeping (adopt, reap, prune, sweep).
-          janitorStart(pi, state, options);
-        } catch (error) {
-          // Fail open: without a session there is no engine (busy-owner or
-          // tmux failure); tools report it via requireTmux/engine absence.
-          // The cause is logged, not swallowed: on boxes where setup throws
-          // (socket/tmp perms, stale locks) this line is the whole diagnosis.
-          console.log(
-            `[pi-bg-shell] engine unavailable; background jobs disabled this session: ${error}`,
-          );
-        }
+        startEngine(piId, ctx.ui as unknown as Parameters<JobsWidget["attach"]>[0]);
       }
       updateBackgroundProcessStatus(ctx, state, options);
     });
 
     pi.on("turn_start", async () => {
+      // Null-engine retry: a startup failure (missing tmux, perms, busy
+      // owner that since cleared) recovers on the next turn, no restart.
+      if (!state.engine && state.tmuxReady?.ok) {
+        try {
+          const piId = state.statusContext?.sessionManager.getSessionId();
+          const ui = state.statusContext?.ui as unknown as Parameters<JobsWidget["attach"]>[0] | undefined;
+          if (piId && ui) {
+            if (startEngine(piId, ui)) {
+              console.log("[pi-bg-shell] engine recovered on turn_start (was unavailable at startup).");
+            }
+          }
+        } catch {
+          // Best-effort; the next turn retries again.
+        }
+      } else if (state.engine) {
+        // Proactive heal: a session killed out-of-band (`tmux kill-server`,
+        // crash) recreates here, so even a read-only turn (/tasks list)
+        // converges instead of wedging until the next spawn.
+        healEngineSessions(state);
+      }
       reconciler?.kick();
       // Age after the kick so this turn's completions show as fresh-finished.
       state.engine?.widget?.ageFinished();

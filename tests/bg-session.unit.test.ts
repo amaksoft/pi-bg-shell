@@ -19,7 +19,7 @@ import {
   refreshOwnerLock,
   releaseOwnerLock,
 } from "../src/engine/owner-lock";
-import { destroySession, ensureSession, SessionBusyError, type Runner } from "../src/engine/session";
+import { destroySession, ensureLiveSession, ensureSession, isSessionAlive, SessionBusyError, type Runner } from "../src/engine/session";
 import { atomicWriteJson, readJsonFile, type SessionRecord } from "../src/engine/sidecar";
 
 const hasTmux = (): boolean => {
@@ -441,6 +441,90 @@ describe("spool symlink guard", () => {
     } finally {
       unlinkSync(link);
     }
+  });
+});
+
+describe("engine session recovery without restart (dead tmux)", () => {
+  it("isSessionAlive reports presence and foreign guid", () => {
+    const runner = fakeRunner();
+    const s = ensureSession({
+      piId: "pi-alive-probe",
+      spoolRoot: freshRoot(),
+      shutdownPolicy: "stop-all",
+      staleAfterMs: 300000,
+      runner,
+    });
+    expect(isSessionAlive(runner, s.socketName, s.sessionName)).toBe(true);
+    expect(isSessionAlive(runner, s.socketName, s.sessionName, s.sessionGuid)).toBe(true);
+    expect(isSessionAlive(runner, s.socketName, s.sessionName, "foreign-guid")).toBe(false);
+    expect(isSessionAlive(runner, s.socketName, "pi-bg-no-such")).toBe(false);
+  });
+
+  it("ensureLiveSession is a no-op when already alive", () => {
+    const runner = fakeRunner();
+    const s = ensureSession({
+      piId: "pi-live-noop",
+      spoolRoot: freshRoot(),
+      shutdownPolicy: "stop-all",
+      staleAfterMs: 300000,
+      runner,
+    });
+    const result = ensureLiveSession(s, runner);
+    expect(result).toEqual({ ok: true, recovered: false });
+  });
+
+  it("ensureLiveSession recreates a killed server under the same identity", () => {
+    const runner = fakeRunner();
+    const s = ensureSession({
+      piId: "pi-recreate",
+      spoolRoot: freshRoot(),
+      shutdownPolicy: "stop-all",
+      staleAfterMs: 300000,
+      runner,
+    });
+    // Simulate `tmux kill-server`: everything on the socket is gone.
+    runner.tmux(s.socketName, ["kill-server"]);
+    expect(isSessionAlive(runner, s.socketName, s.sessionName)).toBe(false);
+    const result = ensureLiveSession(s, runner);
+    expect(result).toEqual({ ok: true, recovered: true });
+    expect(isSessionAlive(runner, s.socketName, s.sessionName, s.sessionGuid)).toBe(true);
+    // Same identity: sidecar still matches the Session object (no epoch bump).
+    const rec = readJsonFile<SessionRecord>(sessionJsonPath(s.spoolDir));
+    expect(rec?.sessionGuid).toBe(s.sessionGuid);
+    expect(rec?.state).toBe("active");
+  });
+
+  it("ensureLiveSession fails closed on a foreign session", () => {
+    const runner = fakeRunner();
+    const s = ensureSession({
+      piId: "pi-foreign-recover",
+      spoolRoot: freshRoot(),
+      shutdownPolicy: "stop-all",
+      staleAfterMs: 300000,
+      runner,
+    });
+    // Foreign session stole our name behind our back.
+    runner.sessions.get(`${s.socketName}//sess:${s.sessionName}`)!.set("@pi_guid", "foreign-guid");
+    const result = ensureLiveSession(s, runner);
+    expect(result.ok).toBe(false);
+  });
+
+  it("ensureLiveSession never throws on a broken runner", () => {
+    const runner = fakeRunner();
+    const s = ensureSession({
+      piId: "pi-broken-runner",
+      spoolRoot: freshRoot(),
+      shutdownPolicy: "stop-all",
+      staleAfterMs: 300000,
+      runner,
+    });
+    const broken: Runner = {
+      tmux: () => {
+        throw new Error("no server running");
+      },
+    };
+    const result = ensureLiveSession(s, broken);
+    expect(result.ok).toBe(false);
   });
 });
 

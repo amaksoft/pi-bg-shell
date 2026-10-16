@@ -51,6 +51,7 @@ import { atomicWriteJson, readJsonFile, type JobRecord } from "./sidecar";
 import type { CompletionItem, JobSnapshot } from "./reconciler";
 import { clearForegroundClaim, refreshForegroundClaim, setForegroundClaim } from "./jobs";
 import type { Runner, Session } from "./session";
+import { ensureLiveSession } from "./session";
 import type { WaitResult } from "./jobs";
 
 /**
@@ -61,6 +62,44 @@ import type { WaitResult } from "./jobs";
  */
 
 const engineOf = (state: ExtensionState) => state.engine;
+
+/**
+ * Heal dead tmux sessions without restart. Best-effort: ensures the owned
+ * session (plus adopted ones) exists, recreating under the same identity
+ * when the server/session died out from under us (`tmux kill-server`,
+ * crash, socket GC). Returns true when every watched session is usable;
+ * false when at least one resists repair (foreign guid / tmux failing).
+ * Never throws — callers decide whether to fail the op or proceed degraded.
+ */
+export const healEngineSessions = (state: ExtensionState): boolean => {
+  const owned = engineOf(state);
+  if (!owned) return false;
+  let healthy = true;
+  const targets: { session: Session; label: string }[] = [
+    { session: owned.session, label: "own" },
+    ...[...(owned.adopted?.entries() ?? [])].map(([spoolDir, entry]) => ({
+      session: entry.session,
+      label: `adopted ${spoolDir}`,
+    })),
+  ];
+  for (const target of targets) {
+    try {
+      const result = ensureLiveSession(target.session, owned.runner);
+      if (result.ok && result.recovered) {
+        console.log(`[pi-bg-shell] session died (${target.label}); recreated without restart.`);
+      } else if (!result.ok) {
+        console.log(`[pi-bg-shell] session recovery failed (${target.label}): ${result.reason}`);
+        healthy = false;
+      }
+    } catch (error) {
+      console.log(
+        `[pi-bg-shell] session recovery threw (${target.label}): ${error instanceof Error ? error.message : String(error)}`,
+      );
+      healthy = false;
+    }
+  }
+  return healthy;
+};
 
 export const syncJobToState = (
   state: ExtensionState,
@@ -148,6 +187,10 @@ const beginJobRun = (
   // Grouped summaries ("ran <displayName>") read it from result details.
   const jobName = input.name;
   const displayName = resolveDisplayName(input.command, input.name);
+  // Proactive heal: a dead session recreates here (same identity), so the
+  // spawn below succeeds. spawnJob also retries once on missing-session,
+  // covering the race where death lands between this heal and the spawn.
+  healEngineSessions(state);
   let job: { jobId: string; windowId: string; exitFile: string; logFile: string };
   try {
     job = spawnJob({
@@ -766,6 +809,9 @@ export const listTasks = (state: ExtensionState): TaskRow[] => {
 };
 
 export const peekTask = (state: ExtensionState, jobId: string, contextLines: number): string | undefined => {
+  // Best-effort heal so a dead session doesn't wedge peeks; the peek itself
+  // stays file-backed when the window is genuinely gone.
+  healEngineSessions(state);
   const target = resolveJobTarget(state, jobId);
   if (!target) return undefined;
   const record = readJsonFile<JobRecord>(jobJsonPath(target.spoolDir, jobId));
@@ -792,6 +838,9 @@ export const peekTask = (state: ExtensionState, jobId: string, contextLines: num
 };
 
 export const killTask = (state: ExtensionState, options: ResolvedOptions, jobId: string): boolean => {
+  // Best-effort heal: killGuarded already finalizes dead-session jobs, but a
+  // live session makes its end-state verification exact instead of inferred.
+  healEngineSessions(state);
   const target = resolveJobTarget(state, jobId);
   if (!target) return false;
   const record = readJsonFile<JobRecord>(jobJsonPath(target.spoolDir, jobId));

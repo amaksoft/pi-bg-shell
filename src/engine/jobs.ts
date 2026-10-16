@@ -5,7 +5,7 @@ import { formatEnvironmentExportsForBash, shellQuote } from "../tmux-utils";
 import { jobJsonPath, jobsDir, sessionJsonPath, sessionLockPath } from "./naming";
 import { isOwnerDead, readOwner } from "./owner-lock";
 import type { Runner, Session } from "./session";
-import { GUID_OPTION } from "./session";
+import { GUID_OPTION, ensureLiveSession } from "./session";
 
 /** Per-window job tag, read back to translate live @ids to jobIds. */
 export const JOB_ID_OPTION = "@pi_job_id";
@@ -110,22 +110,51 @@ export const spawnJob = (
     seen: false,
   };
   atomicWriteJson(jobJsonPath(session.spoolDir, jobId), record);
-  const windowId = runner
-    .tmux(session.socketName, [
-      "new-window",
-      "-d",
-      "-t",
-      session.sessionName,
-      "-n",
-      params.windowName,
-      "-c",
-      params.cwd,
-      "-P",
-      "-F",
-      "#{window_id}",
-      scriptPath,
-    ])
-    .trim();
+  let windowId: string;
+  try {
+    windowId = runner
+      .tmux(session.socketName, [
+        "new-window",
+        "-d",
+        "-t",
+        session.sessionName,
+        "-n",
+        params.windowName,
+        "-c",
+        params.cwd,
+        "-P",
+        "-F",
+        "#{window_id}",
+        scriptPath,
+      ])
+      .trim();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    // Dead session/server (user ran `tmux kill-server`, crash, reboot):
+    // recreate in place under the same identity and retry once, so a dead
+    // session recovers without a pi restart. Anything else rethrows.
+    if (!/can't find session|unknown session|no such|no server running|failed to connect/i.test(detail)) {
+      throw error;
+    }
+    const live = ensureLiveSession(session, runner);
+    if (!live.ok) throw error;
+    windowId = runner
+      .tmux(session.socketName, [
+        "new-window",
+        "-d",
+        "-t",
+        session.sessionName,
+        "-n",
+        params.windowName,
+        "-c",
+        params.cwd,
+        "-P",
+        "-F",
+        "#{window_id}",
+        scriptPath,
+      ])
+      .trim();
+  }
   runner.tmux(session.socketName, ["set-option", "-t", windowId, JOB_ID_OPTION, jobId]);
   record.windowId = windowId;
   atomicWriteJson(jobJsonPath(session.spoolDir, jobId), record);

@@ -198,6 +198,109 @@ const applyGuidOptions = (runner: Runner, socket: string, session: string, guid:
   runner.tmux(socket, ["set-option", "-t", session, GUID_OPTION, guid]);
 };
 
+/**
+ * Liveness probe: true when the tmux session exists on our private server.
+ * When `expectedGuid` is given, a live session with a mismatched guid
+ * reads as NOT alive (foreign/recycled) so callers fail closed instead of
+ * operating on someone else's session.
+ */
+export const isSessionAlive = (
+  runner: Runner,
+  socketName: string,
+  sessionName: string,
+  expectedGuid?: string,
+): boolean => {
+  try {
+    runner.tmux(socketName, ["has-session", "-t", sessionName]);
+  } catch {
+    return false;
+  }
+  if (expectedGuid === undefined) return true;
+  try {
+    const live = runner
+      .tmux(socketName, ["show-options", "-t", sessionName, "-v", GUID_OPTION])
+      .trim();
+    // Empty read is inconclusive (older tmux / race): treat as alive so we
+    // don't recreate over a session we simply couldn't verify. A present
+    // but mismatched guid is proof of foreignness → not alive.
+    if (!live) return true;
+    return live === expectedGuid;
+  } catch {
+    return true;
+  }
+};
+
+export type EnsureLiveResult = { ok: true; recovered: boolean } | { ok: false; reason: string };
+
+/**
+ * Recover a dead tmux session without restart. We already hold the owner
+ * lock for this spool dir, so recreating the session in place is safe:
+ * same socket, same session name, SAME guid (identity preserved, no epoch
+ * bump, no sidecar rewrite — the existing Session object stays valid).
+ *
+ * Returns `{ ok: true, recovered: false }` when already alive,
+ * `{ ok: true, recovered: true }` after a successful recreate, or
+ * `{ ok: false }` when the live session resists repair (foreign guid) or
+ * tmux keeps failing. Never throws — callers branch on the result.
+ */
+export const ensureLiveSession = (session: Session, runner: Runner): EnsureLiveResult => {
+  // Fast path: session present. A mismatched guid here means a foreign
+  // session somehow owns our name — fail closed, never steal it.
+  try {
+    runner.tmux(session.socketName, ["has-session", "-t", session.sessionName]);
+    try {
+      const liveGuid = runner
+        .tmux(session.socketName, ["show-options", "-t", session.sessionName, "-v", GUID_OPTION])
+        .trim();
+      if (liveGuid && liveGuid !== session.sessionGuid) {
+        return { ok: false, reason: "foreign session owns our name (guid mismatch)" };
+      }
+    } catch {
+      // Unverifiable guid: session exists, proceed as alive.
+    }
+    return { ok: true, recovered: false };
+  } catch {
+    // Session/server gone — fall through to recreate.
+  }
+  try {
+    runner.tmux(session.socketName, ["new-session", "-d", "-s", session.sessionName, "-x", "200", "-y", "50"]);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    // Lost the race (someone recreated between has-session and new-session):
+    // treat as alive and re-verify below instead of failing.
+    if (!/duplicate session|session.*exists|already/i.test(detail)) {
+      // new-session can also fail when the server is mid-death; one retry
+      // covers the transient. A second failure is real.
+      try {
+        runner.tmux(session.socketName, ["new-session", "-d", "-s", session.sessionName, "-x", "200", "-y", "50"]);
+      } catch (retryError) {
+        const retryDetail = retryError instanceof Error ? retryError.message : String(retryError);
+        if (!/duplicate session|session.*exists|already/i.test(retryDetail)) {
+          return { ok: false, reason: `new-session failed: ${retryDetail.split("\n")[0]}` };
+        }
+      }
+    }
+  }
+  try {
+    runner.tmux(session.socketName, ["set-option", "-t", session.sessionName, GUID_OPTION, session.sessionGuid]);
+    let verified: string | undefined;
+    try {
+      const out = runner.tmux(session.socketName, ["show-options", "-t", session.sessionName, "-v", GUID_OPTION]);
+      const guid = out.trim();
+      verified = guid.length > 0 ? guid : undefined;
+    } catch {
+      verified = undefined;
+    }
+    if (verified !== undefined && verified !== session.sessionGuid) {
+      return { ok: false, reason: "guid verify failed after recreate (foreign session?)" };
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { ok: false, reason: `guid tagging failed: ${detail.split("\n")[0]}` };
+  }
+  return { ok: true, recovered: true };
+};
+
 const touchHeartbeatFile = (spoolDir: string): void => {
   try {
     refreshOwnerLock(sessionLockPath(spoolDir), readOwner(sessionLockPath(spoolDir))?.nonce ?? "");
