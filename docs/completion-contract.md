@@ -163,9 +163,9 @@ spool dirs. On `session_start` the engine only rebuilds its OWN dir; the
 reaper kills+tombstones dead sessions but never delivers. Foreign completions
 surface explicitly:
 
-- `/orphans` lists lingering foreign sessions (live/dead, running/done
-  counts, tombstoned) with an orphan pointer in `/tasks` when foreign work
-  is pending.
+- `/orphans` lists lingering foreign sessions for interactive adoption.
+- `bg list-orphans` and `bg adopt-orphan` provide the same flow to agents.
+- `/tasks` shows an orphan pointer when foreign work is pending.
 - Adopt takes the dir lock (owner-dead gate: acquirable flock AND stale
   heartbeat), consumes completed exit files (exactly-once, original jobIds),
   salvages tombstoned running rows as synthetic `session-reaped` completions
@@ -205,9 +205,10 @@ silent — tmux errors are captured for parsing, never printed.
 ## Session scope
 
 Completions deliver to the session that launched the job (or its explicit
-adopter). A new process never learns prior jobs' outcomes except through
-`--continue` (same pi id, full sidecar rebuild) or `--adopt-orphan` — use
-`Read` on the spool path or `/tasks`/`/orphans` to catch up.
+adopter). A new process learns prior outcomes through `--continue` or explicit adoption.
+Use `/orphans` for interactive adoption.
+Agents use `bg list-orphans` and `bg adopt-orphan`.
+Use `Read` on the spool path or `/tasks` to inspect retained output.
 
 ## Explicit non-contract
 

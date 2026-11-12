@@ -232,8 +232,8 @@ describe("tmux-bash unit", () => {
       const tmuxTool = registeredTool(tools, "tmux");
       const action = tmuxTool.parameters.properties?.action as { enum?: string[] };
 
-      expect(action.enum).toEqual(["list", "peek", "kill"]);
-      expect(tmuxTool.promptGuidelines?.join("\n")).toContain("tmux peek/kill");
+      expect(action.enum).toEqual(["list", "peek", "kill", "list-orphans", "adopt-orphan"]);
+      expect(tmuxTool.promptGuidelines?.join("\n")).toContain("peek and kill");
       expect(tmuxTool.promptGuidelines?.join("\n")).not.toContain("poll/unpoll");
     });
 
@@ -243,7 +243,7 @@ describe("tmux-bash unit", () => {
       const action = tmuxTool.parameters.properties?.action as { enum?: string[] };
 
       expect(action.enum).toEqual(["peek", "kill"]);
-      expect(tmuxTool.promptGuidelines?.join("\n")).toContain("tmux peek/kill");
+      expect(tmuxTool.promptGuidelines?.join("\n")).toContain("peek and kill");
     });
 
     it("removes bash polling parameters by default", () => {

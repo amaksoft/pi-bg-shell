@@ -2,8 +2,8 @@
 
 tmux-backed background shell execution for pi with Claude-Code-like UX:
 `Ctrl+B` send-to-background, timeout-detaches, output-file `Read`,
-`bg`/`tmux` list/peek/stop, `/tasks` list, footer indicator, completion
-follow-ups + toasts, orphan reattach across sessions.
+`bg`/`tmux` job control, `/tasks` list, footer indicator, completion
+follow-ups, toasts, and orphan adoption across sessions.
 
 > **License:** MIT (see `LICENSE`). This project began as a fork of
 > `richardgill/pi-extensions` (`extensions/tmux-bash` @ `8eda59a`) and has
@@ -13,8 +13,8 @@ follow-ups + toasts, orphan reattach across sessions.
 ## Divergence plan (CC parity, full engine MVP)
 
 Upstream already provides: `bash` replacement on tmux, `background` + `timeoutAction`,
-`tmux` list/peek/kill (+opt-in poll), completion follow-ups, footer status,
-parity e2e vs native bash.
+`tmux` job and orphan actions, completion follow-ups, footer status,
+and parity tests against native bash.
 
 Engine features (done ✓, todo ○):
 
@@ -34,9 +34,9 @@ Engine features (done ✓, todo ○):
    `PI_BG_DISABLE=1|true|yes` (extension registers nothing, native bash untouched)
 7. ✓ Non-git cwd support (base directory = git root, else launch cwd, for session
    naming, window cwd, and scope filtering)
-8. ✓ Orphan reattach: `leave-running`/crash survivors rejoin with stable identity
-   + resumed completions (silent watch); `bg` tool alias; completion toasts
-   (`notifyOnCompletion`, default on)
+8. ✓ Orphan reattach: `leave-running` and crash survivors retain stable identities.
+   The `/orphans` command and `bg` tool can adopt them across tmux sockets.
+   Adoption watches each job on its original socket. It does not transfer tmux windows.
 
 ## Layout
 
@@ -78,7 +78,7 @@ Only non-defaults worth knowing:
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `shutdownPolicy` | `"stop-all"` | `"leave-running"` keeps the session after quit (rejoin via `--continue`, adopt via `/orphans`) |
+| `shutdownPolicy` | `"stop-all"` | `"leave-running"` keeps the session after quit. Use `/orphans` or `bg list-orphans` and `bg adopt-orphan` to adopt it. |
 | `defaultTimeoutAction` | `"ask"` | `"kill"` terminates on timeout, `"background"` always demotes; `"ask"` (default) demotes and lets the model decide kill vs keep on the next turn |
 | `defaultTimeoutSeconds` / `maxTimeoutSeconds` | `30` / `600` | Foreground wait before `timeoutAction` |
 | `notifyOnCompletion` | `true` | Toast on job completion (transcript turn carries details) |
@@ -88,7 +88,7 @@ Only non-defaults worth knowing:
 | `detachShortcut` | `"ctrl+b"` | `false` disables. Note: pi has no contextual-shortcut API, so the key is claimed globally and shadows `tui.editor.cursorLeft` (pi reports the conflict at startup and honors this extension). Set `false` if you live on emacs cursor keys — backgrounding still works via `run_in_background`, timeout-detach, and `/tasks`. |
 | `tmuxBinary` | `"tmux"` | Path to the tmux binary when it is not on `PATH` |
 | `bashToolName` / `tmuxToolName` / `bgToolName` | `"bash"` / `"tmux"` / `"bg"` | Rename registered tools (`bg` is a pure alias of `tmux`: same backend, one copy of guidelines) |
-| `tmuxEnabledActions` | `["list", "peek", "kill"]` | Subset of tmux actions to register; empty disables the `tmux`/`bg` tools (the `bash` tool is unaffected) |
+| `tmuxEnabledActions` | `["list", "peek", "kill", "list-orphans", "adopt-orphan"]` | Select the registered tmux actions. An empty list disables the `tmux` and `bg` tools. |
 | `stallPromptThresholdSeconds` | `120` | Static-log stall warnings (`0` disables) |
 | `plainChrome` | `false` | Render completion/poll messages as unstyled text (minimal presents) |
 

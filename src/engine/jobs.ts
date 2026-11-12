@@ -23,7 +23,7 @@ import { atomicWriteJson, ensureDir, readJsonFile, type JobRecord, type SessionR
  * fencing decision derives from this — never from memory alone
  * (registries desync across restarts/takeovers; the journal does not).
  */
-export const isJobRecordLive = (record: JobRecord | undefined): boolean =>
+export const isJobRecordLive = (record: JobRecord | undefined): record is JobRecord =>
   !!record && record.status === "running";
 
 /**

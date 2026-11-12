@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFile
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resolveOptions } from "../src/config";
 import { createState } from "../src/runtime";
 import { adoptOrphanDir, releaseAdoptedDirs, restoreAdoptedDirs, scanOrphanDirs } from "../src/engine/orphans";
@@ -157,6 +157,75 @@ describe("engine adopted routing", () => {
     expect(calls.some((c) => c.socket === "pi-bg-sock-own-1")).toBe(false);
     expect(state.backgroundJobs.has("eeeeee")).toBe(false);
     releaseAdoptedDirs(state);
+  });
+});
+
+describe("agent orphan actions", () => {
+  const toolContext = (piId: string) => ({
+    hasUI: false,
+    sessionManager: { getSessionId: () => piId },
+  }) as unknown as ExtensionContext;
+
+  it("lists and adopts an orphan across tmux sockets", async () => {
+    const { executeTool } = await import("../src/runtime");
+    const outputDir = freshRoot();
+    const spoolRoot = join(outputDir, "sessions");
+    const { state } = ownSession(spoolRoot, "own-1");
+    state.tmuxReady = { ok: true, version: "3.4" };
+    const foreign = join(spoolRoot, "foreign-dir");
+    writeSession(foreign, "foreign-1", "leave-running");
+    writeOwner(foreign, "dead");
+    writeJob(foreign, "abc123", { log: "still running\n" });
+    const { pi } = mockPi();
+    const ctx = toolContext("own-1");
+
+    const listed = executeTool(
+      { action: "list-orphans" },
+      ctx,
+      state,
+      pi,
+      options(outputDir),
+    ) as unknown as { content: { text: string }[]; details: { orphans: { piId: string }[] } };
+    expect(listed.content[0].text).toContain("foreign-1");
+    expect(listed.content[0].text).toContain("1 running");
+    expect(listed.details.orphans).toContainEqual(expect.objectContaining({ piId: "foreign-1" }));
+
+    const adopted = executeTool(
+      { action: "adopt-orphan", piId: "foreign-1" },
+      ctx,
+      state,
+      pi,
+      options(outputDir),
+    ) as unknown as { content: { text: string }[]; details: { stillRunning: string[] } };
+    expect(adopted.content[0].text).toContain("Adopted orphan session foreign-1");
+    expect(adopted.details.stillRunning).toEqual(["abc123"]);
+    expect(state.engine?.adopted?.get(foreign)?.session.socketName).toBe("pi-bg-sock-foreign-1");
+    expect(peekTask(state, "abc123", 10)).toContain("still running");
+    releaseAdoptedDirs(state);
+  });
+
+  it("rejects an ambiguous orphan session ID", async () => {
+    const { executeTool } = await import("../src/runtime");
+    const outputDir = freshRoot();
+    const spoolRoot = join(outputDir, "sessions");
+    const { state } = ownSession(spoolRoot, "own-1");
+    state.tmuxReady = { ok: true, version: "3.4" };
+    for (const dir of ["foreign-a", "foreign-b"]) {
+      const spoolDir = join(spoolRoot, dir);
+      writeSession(spoolDir, "duplicate-id");
+      writeOwner(spoolDir, "dead");
+    }
+    const { pi } = mockPi();
+    const result = executeTool(
+      { action: "adopt-orphan", piId: "duplicate-id" },
+      toolContext("own-1"),
+      state,
+      pi,
+      options(outputDir),
+    ) as { content: { text: string }[]; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("ambiguous");
   });
 });
 

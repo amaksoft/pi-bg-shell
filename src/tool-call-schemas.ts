@@ -41,7 +41,9 @@ export type BashInput =
 export type TmuxInput =
   | { action: "list" }
   | { action: "kill"; window: string }
-  | { action: "peek"; window: string };
+  | { action: "peek"; window: string }
+  | { action: "list-orphans" }
+  | { action: "adopt-orphan"; piId: string };
 
 const commandField = z.string().min(1).describe("Bash command to execute.");
 const nameField = z.string().optional().describe("Optional tmux window name.");
@@ -55,6 +57,12 @@ const windowField = z
   .string()
   .regex(/^(@\d+|[0-9a-f]{6})$/)
   .describe("tmux #{window_id} (e.g. @123) or bg-shell job_id (e.g. a1b2c3).");
+
+const piIdField = z
+  .string()
+  .trim()
+  .min(1)
+  .describe("Pi session ID returned by list-orphans.");
 
 const timeoutField = (options: SchemaOptions) =>
   z
@@ -135,6 +143,13 @@ const buildTmuxInputSchema = (options: SchemaOptions): z.ZodType<TmuxInput> => {
     peek: z.object({
       action: z.literal("peek").describe("tmux action."),
       window: windowField,
+    }),
+    "list-orphans": z.object({
+      action: z.literal("list-orphans").describe("List foreign background sessions."),
+    }),
+    "adopt-orphan": z.object({
+      action: z.literal("adopt-orphan").describe("Adopt one ownerless background session."),
+      piId: piIdField,
     }),
   };
   const enabled = options.tmuxEnabledActions.map((action) => variants[action]);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TMUX_ACTIONS } from "../src/config";
-import { buildBashToolCallSchema } from "../src/tool-call-schemas";
+import { buildBashToolCallSchema, buildTmuxToolCallSchema } from "../src/tool-call-schemas";
 
 type TestOptions = Parameters<typeof buildBashToolCallSchema>[0];
 
@@ -19,6 +19,8 @@ const options: TestOptions = {
 const invalidInput = (message: string) => ({ error: message });
 const bashToolCallSchema = (overrides: Partial<typeof options> = {}) =>
   buildBashToolCallSchema({ ...options, ...overrides }, invalidInput);
+const tmuxToolCallSchema = (overrides: Partial<typeof options> = {}) =>
+  buildTmuxToolCallSchema({ ...options, ...overrides }, invalidInput);
 
 describe("zod tool call schema generation", () => {
   it("generates top-level object schemas without top-level unions", () => {
@@ -105,5 +107,28 @@ describe("zod tool call schema generation", () => {
     const result = await bashToolCallSchema().handleInput({ command: "" }, () => ({ ok: true }));
 
     expect(result).toEqual({ error: expect.stringContaining("Invalid bash input") });
+  });
+
+  it("parses orphan list and adoption actions", async () => {
+    const listed = await tmuxToolCallSchema().handleInput(
+      { action: "list-orphans" },
+      (input) => input,
+    );
+    const adopted = await tmuxToolCallSchema().handleInput(
+      { action: "adopt-orphan", piId: " session-123 " },
+      (input) => input,
+    );
+
+    expect(listed).toEqual({ action: "list-orphans" });
+    expect(adopted).toEqual({ action: "adopt-orphan", piId: "session-123" });
+  });
+
+  it("requires a Pi session ID for orphan adoption", async () => {
+    const result = await tmuxToolCallSchema().handleInput(
+      { action: "adopt-orphan", piId: "" },
+      (input) => input,
+    );
+
+    expect(result).toEqual({ error: expect.stringContaining("Invalid tmux input") });
   });
 });

@@ -363,7 +363,7 @@ export const resyncSessionFromDisk = (session: Session): SessionResync => {
       socketName: session.socketName,
       sessionGuid: live.sessionGuid,
       ownerNonce: live.ownerNonce,
-      epoch: live.epoch,
+      epoch: live.epoch ?? session.epoch,
     },
     moved: true,
   };

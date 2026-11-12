@@ -5,11 +5,13 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { execSafe, shellQuote, tmuxWindowAttachHint, type TmuxWindow } from "./tmux-utils";
 import { BACKGROUND_BASH_STATUS_KEY, type ResolvedOptions } from "./config";
 import type { BashInput, TmuxInput } from "./tool-call-schemas";
 import type { JobsWidget } from "./tools/jobs-widget";
 import { killTask, listTasks, peekTask } from "./engine/wiring";
+import { adoptOrphanDir, scanOrphanDirs, type OrphanRow } from "./engine/orphans";
 import { JOB_ID_OPTION } from "./engine/jobs";
 import type { Reconciler } from "./engine/reconciler";
 import type { Runner, Session } from "./engine/session";
@@ -370,6 +372,97 @@ const killAction = (
   );
 };
 
+const orphanStatus = (row: OrphanRow): string =>
+  [
+    row.ownerDead ? "owner dead" : "owner live",
+    row.leaveRunning ? "leave-running" : "stop-all",
+    row.tombstoned ? "reaped" : "session present",
+    `${row.running} running`,
+    `${row.pendingCompleted} done`,
+  ].join(" · ");
+
+const orphanRows = (
+  ctx: ExtensionContext,
+  options: ResolvedOptions,
+): OrphanRow[] =>
+  scanOrphanDirs(
+    join(options.outputDir, "sessions"),
+    ctx.sessionManager.getSessionId(),
+    options.ownerStaleAfterMs,
+  );
+
+const listOrphansAction = (
+  ctx: ExtensionContext,
+  state: ExtensionState,
+  options: ResolvedOptions,
+) => {
+  const adoptedDirs = new Set(state.engine?.adopted?.keys() ?? []);
+  const rows = orphanRows(ctx, options);
+  const lines = rows.map((row) =>
+    `${row.piId} · ${orphanStatus(row)}${adoptedDirs.has(row.spoolDir) ? " · adopted here" : ""}`,
+  );
+  const summary = rows.length === 0
+    ? "No orphaned background sessions."
+    : `${rows.length} orphaned background session(s).`;
+  return renderedToolText(
+    lines.length === 0 ? summary : `${summary}\n\n${lines.join("\n")}`,
+    { summary, expandedLines: lines, collapsedLines: lines },
+    {
+      orphans: rows.map((row) => ({
+        piId: row.piId,
+        ownerDead: row.ownerDead,
+        leaveRunning: row.leaveRunning,
+        tombstoned: row.tombstoned,
+        running: row.running,
+        pendingCompleted: row.pendingCompleted,
+        adopted: adoptedDirs.has(row.spoolDir),
+      })),
+    },
+  );
+};
+
+const adoptOrphanAction = (
+  params: Extract<TmuxInput, { action: "adopt-orphan" }>,
+  ctx: ExtensionContext,
+  state: ExtensionState,
+  pi: ExtensionAPI,
+  options: ResolvedOptions,
+) => {
+  if (!state.engine) {
+    return toolError("No background engine. Start a bash command before orphan adoption.");
+  }
+  const matches = orphanRows(ctx, options).filter((row) => row.piId === params.piId);
+  if (matches.length === 0) return toolError(`Unknown orphan session: ${params.piId}`);
+  if (matches.length > 1) {
+    return toolError(`Orphan session ID is ambiguous: ${params.piId}`);
+  }
+  const row = matches[0];
+  if (state.engine.adopted?.has(row.spoolDir)) {
+    return summaryToolText(`Orphan session ${params.piId} is already adopted.`);
+  }
+  const result = adoptOrphanDir(pi, state, options, row.spoolDir);
+  if (!result.adopted) {
+    return toolError(`Could not adopt ${params.piId}: ${result.error ?? "unknown error"}.`);
+  }
+  updateBackgroundProcessStatus(ctx, state, options);
+  const summary = `Adopted orphan session ${params.piId}.`;
+  const lines = [
+    `${result.deliveredCompleted.length} completed`,
+    `${result.salvagedRunning.length} salvaged`,
+    `${result.stillRunning.length} running`,
+  ];
+  return renderedToolText(
+    `${summary}\n\n${lines.join("\n")}`,
+    { summary, expandedLines: lines, collapsedLines: lines },
+    {
+      piId: params.piId,
+      deliveredCompleted: result.deliveredCompleted,
+      salvagedRunning: result.salvagedRunning,
+      stillRunning: result.stillRunning,
+    },
+  );
+};
+
 export const executeTool = (
   params: TmuxInput,
   ctx: ExtensionContext,
@@ -381,6 +474,10 @@ export const executeTool = (
   if (tmuxError) return toolError(tmuxError);
   if (params.action === "peek") return peekAction(params, state, options);
   if (params.action === "list") return listAction(state);
+  if (params.action === "list-orphans") return listOrphansAction(ctx, state, options);
+  if (params.action === "adopt-orphan") {
+    return adoptOrphanAction(params, ctx, state, pi, options);
+  }
   if (params.action === "kill") {
     const result = killAction(params, state, options);
     updateBackgroundProcessStatus(ctx, state, options);

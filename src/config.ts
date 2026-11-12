@@ -28,19 +28,20 @@ const DEFAULT_TMUX_SNIPPET = "Inspect and control the background tmux sessions c
 const DEFAULT_BASH_DESCRIPTION =
   'Execute a bash command in a background tmux window. Output is truncated to last {{bashContextLines}} lines or {{maxOutputKb}}KB. Defaults to a {{defaultTimeoutSeconds}}s timeout, max {{maxTimeoutSeconds}}s; timeoutAction defaults to "{{defaultTimeoutAction}}". Use background for long-running commands. Pass name (a short human label, e.g. "auth tests") for background runs — it shows in the footer, /tasks, and job widget.';
 const DEFAULT_TMUX_DESCRIPTION =
-  "Inspect and control background tmux windows created by bash. Peek output is compact by default.";
+  "Inspect and control background tmux windows. List and adopt orphan sessions when their owners are dead.";
 const DEFAULT_BG_DESCRIPTION =
-  "Manage background shell jobs: list them, peek at output, or stop one by job_id. Same backend as {{tmuxToolName}}.";
+  "Manage background jobs and orphan sessions. List jobs, inspect output, stop jobs, or adopt orphan sessions.";
 const DEFAULT_PEEK_EXPANDED_LINES = 50;
 
-export const TMUX_ACTIONS = ["list", "peek", "kill"] as const;
-const DEFAULT_ENABLED_ACTIONS = ["list", "peek", "kill"] as const;
+export const TMUX_ACTIONS = ["list", "peek", "kill", "list-orphans", "adopt-orphan"] as const;
+const DEFAULT_ENABLED_ACTIONS = TMUX_ACTIONS;
 
 const DEFAULT_GUIDELINES = [
   'Use {{bashToolName}} with background: true (or run_in_background: true) or timeoutAction: "background" for long-running commands, servers, watchers, REPLs, interactive prompts, and background bash commands.',
   "Background bash commands return a job_id and log_path and report automatically when they finish; prefer waiting for the completion report over re-reading output, and use the log_path with Read only when you need interim output.",
   "Do not poll background jobs in a loop (repeated peeks/reads of the same log): interim output arrives on its own via poll check-ins and exactly one completion report per job. Poll manually at most once, then wait.",
-  "Use {{tmuxToolName}} list to find background windows; {{tmuxToolName}} peek/kill take a job_id or a stable #{window_id} like @123.",
+  "Use {{tmuxToolName}} list to find background windows. The peek and kill actions accept a job_id or stable #{window_id}.",
+  "Use {{tmuxToolName}} list-orphans before adopt-orphan. Adoption watches jobs on their original tmux socket.",
   "Background jobs do not survive pi shutdown: the default stop-all policy kills them without a completion report; the transcript plus spool logs are the history.",
   "If asked, you can attach to tmux window using: {{attachCommand}}, where @123 is a #{window_id}.",
 ];
