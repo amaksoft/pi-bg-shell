@@ -301,6 +301,74 @@ export const ensureLiveSession = (session: Session, runner: Runner): EnsureLiveR
   return { ok: true, recovered: true };
 };
 
+/**
+ * Best-effort read of the live session GUID. Returns undefined when the
+ * session is absent (the recreate path owns that case) or the guid is
+ * unreadable (inconclusive — same leniency as isSessionAlive). A defined
+ * value that differs from ours is proof of foreignness.
+ */
+export const readLiveSessionGuid = (
+  session: Session,
+  runner: Runner,
+): string | undefined => {
+  try {
+    runner.tmux(session.socketName, ["has-session", "-t", session.sessionName]);
+  } catch {
+    return undefined;
+  }
+  try {
+    const out = runner
+      .tmux(session.socketName, ["show-options", "-t", session.sessionName, "-v", GUID_OPTION])
+      .trim();
+    return out.length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+export interface SessionResync {
+  session: Session;
+  moved: boolean;
+}
+
+/**
+ * Takeover recovery: adopt the on-disk identity when it moved under us. A
+ * second pi with our pi id that won the owner lock rewrites session.json
+ * with a new guid (epoch bump) and re-tags the live tmux session; our
+ * in-memory Session then reads as foreign on every heal. Resyncing makes
+ * the loser converge on the winner's identity instead of wedging forever.
+ * The spool dir is stable (canonical by pi id), so journals stay coherent.
+ *
+ * Returns `{ moved: false }` when the disk matches us or is unreadable —
+ * callers keep failing closed on genuine foreignness.
+ */
+export const resyncSessionFromDisk = (session: Session): SessionResync => {
+  let live: SessionRecord | undefined;
+  try {
+    live = readJsonFile<SessionRecord>(sessionJsonPath(session.spoolDir));
+  } catch {
+    live = undefined;
+  }
+  if (
+    !live ||
+    (live.epoch === session.epoch && live.sessionGuid === session.sessionGuid)
+  ) {
+    return { session, moved: false };
+  }
+  return {
+    session: {
+      piId: live.piId,
+      spoolDir: session.spoolDir,
+      sessionName: live.sessionName,
+      socketName: session.socketName,
+      sessionGuid: live.sessionGuid,
+      ownerNonce: live.ownerNonce,
+      epoch: live.epoch,
+    },
+    moved: true,
+  };
+};
+
 const touchHeartbeatFile = (spoolDir: string): void => {
   try {
     refreshOwnerLock(sessionLockPath(spoolDir), readOwner(sessionLockPath(spoolDir))?.nonce ?? "");

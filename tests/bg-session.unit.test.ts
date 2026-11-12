@@ -19,7 +19,10 @@ import {
   refreshOwnerLock,
   releaseOwnerLock,
 } from "../src/engine/owner-lock";
-import { destroySession, ensureLiveSession, ensureSession, isSessionAlive, SessionBusyError, type Runner } from "../src/engine/session";
+import { destroySession, ensureLiveSession, ensureSession, isSessionAlive, readLiveSessionGuid, resyncSessionFromDisk, SessionBusyError, type Runner } from "../src/engine/session";
+import { spawnJob } from "../src/engine/jobs";
+import { healEngineSessions } from "../src/engine/wiring";
+import type { ExtensionState } from "../src/engine/types";
 import { atomicWriteJson, readJsonFile, type SessionRecord } from "../src/engine/sidecar";
 
 const hasTmux = (): boolean => {
@@ -174,6 +177,29 @@ describe("engine owner lock (S3/S4)", () => {
     utimesSync(join(lockDir, "heartbeat"), new Date(0), new Date(0));
     expect(isOwnerDead(lockDir, first.owner, 50)).toBe(false);
     expect(acquireOwnerLock(lockDir, 50).outcome).toBe("live");
+  });
+
+  it("fresh heartbeat with dead pid reads dead (crash-resume fast path)", () => {
+    const lockDir = join(freshRoot(), "session.lock");
+    const first = acquireOwnerLock(lockDir, 300000);
+    // Owner process is gone but the heartbeat is still fresh: the old
+    // verdict held the lock for the full stale window; now it takes over.
+    atomicWriteJson(join(lockDir, "owner.json"), {
+      nonce: "dead",
+      heartbeatAt: new Date().toISOString(),
+      pid: 1 << 24,
+    });
+    const dead = readOwner(lockDir)!;
+    expect(isOwnerDead(lockDir, dead, 300000)).toBe(true);
+    expect(acquireOwnerLock(lockDir, 300000).outcome).toBe("acquired");
+    expect(first.owner.nonce).not.toBe(readOwner(lockDir)?.nonce);
+  });
+
+  it("fresh heartbeat with live pid still holds (no false takeover)", () => {
+    const lockDir = join(freshRoot(), "session.lock");
+    const first = acquireOwnerLock(lockDir, 300000);
+    expect(isOwnerDead(lockDir, first.owner, 300000)).toBe(false);
+    expect(acquireOwnerLock(lockDir, 300000).outcome).toBe("live");
   });
 
   it("stale heartbeat with dead pid takes over and mints a fresh nonce", () => {
@@ -543,5 +569,137 @@ describe("atomicWriteJson cross-device safety (headless)", () => {
       if (saved === undefined) delete process.env.TMPDIR;
       else process.env.TMPDIR = saved;
     }
+  });
+});
+
+describe("takeover resync (duplicate pi, same pi id)", () => {
+  /** Fake runner that also tracks windows, so spawnJob runs headless. */
+  const fakeRunnerWindows = (): Runner & { sessions: Map<string, Map<string, string>> } => {
+    const sessions = new Map<string, Map<string, string>>();
+    const sessKey = (socket: string, name: string): string => `${socket}//sess:${name}`;
+    let nextWin = 9;
+    const tmux = (socket: string, args: string[]): string => {
+      const [cmd, ...rest] = args;
+      if (cmd === "new-session") {
+        const name = rest[rest.indexOf("-s") + 1];
+        if (sessions.has(sessKey(socket, name))) throw new Error("duplicate session");
+        sessions.set(sessKey(socket, name), new Map());
+        return "";
+      }
+      if (cmd === "new-window") {
+        const id = `@${nextWin++}`;
+        sessions.set(sessKey(socket, id), new Map());
+        return id;
+      }
+      if (cmd === "has-session") {
+        const t = rest[rest.indexOf("-t") + 1];
+        if (!sessions.has(sessKey(socket, t))) throw new Error("can't find session");
+        return "";
+      }
+      if (cmd === "set-option") {
+        const t = rest[rest.indexOf("-t") + 1];
+        const opts = sessions.get(sessKey(socket, t));
+        if (!opts) throw new Error("can't find session");
+        for (let i = rest.indexOf("-t") + 2; i + 1 < rest.length; i += 2) opts.set(rest[i], rest[i + 1]);
+        return "";
+      }
+      if (cmd === "show-options") {
+        const t = rest[rest.indexOf("-t") + 1];
+        const opt = rest[rest.indexOf("-v") + 1];
+        const opts = sessions.get(sessKey(socket, t));
+        if (!opts) throw new Error("can't find session");
+        return `${opts.get(opt) ?? ""}\n`;
+      }
+      if (cmd === "kill-server") {
+        for (const k of [...sessions.keys()]) if (k.startsWith(`${socket}//`)) sessions.delete(k);
+        return "";
+      }
+      throw new Error(`unsupported ${cmd}`);
+    };
+    return { tmux, sessions };
+  };
+
+  const boot = (root: string, piId: string, runner: Runner) =>
+    ensureSession({ piId, spoolRoot: root, shutdownPolicy: "stop-all", staleAfterMs: 300000, runner });
+
+  /** A dies (lock released), B boots the same pi id: epoch bump + guid re-tag. */
+  const takeover = (root: string, piId: string, runner: Runner) => {
+    const loser = boot(root, piId, runner);
+    releaseOwnerLock(sessionLockPath(loser.spoolDir), loser.ownerNonce);
+    const winner = boot(root, piId, runner);
+    expect(winner.epoch).toBe(loser.epoch + 1);
+    expect(winner.sessionGuid).not.toBe(loser.sessionGuid);
+    expect(ensureLiveSession(loser, runner).ok).toBe(false);
+    return { loser, winner };
+  };
+
+  it("resyncSessionFromDisk is a no-op when in sync", () => {
+    const runner = fakeRunner();
+    const s = boot(freshRoot(), "pi-resync-noop", runner);
+    const resynced = resyncSessionFromDisk(s);
+    expect(resynced.moved).toBe(false);
+    expect(resynced.session.sessionGuid).toBe(s.sessionGuid);
+  });
+
+  it("loser resyncs to the winner epoch and heals", () => {
+    const runner = fakeRunner();
+    const root = freshRoot();
+    const { loser, winner } = takeover(root, "pi-resync-heal", runner);
+    const resynced = resyncSessionFromDisk(loser);
+    expect(resynced.moved).toBe(true);
+    expect(resynced.session.sessionGuid).toBe(winner.sessionGuid);
+    expect(resynced.session.epoch).toBe(winner.epoch);
+    expect(readLiveSessionGuid(resynced.session, runner)).toBe(winner.sessionGuid);
+    expect(ensureLiveSession(resynced.session, runner)).toEqual({ ok: true, recovered: false });
+  });
+
+  it("healEngineSessions resyncs a stale loser in place instead of failing", () => {
+    const runner = fakeRunner();
+    const root = freshRoot();
+    const { loser, winner } = takeover(root, "pi-resync-wiring", runner);
+    const state = {
+      engine: { session: loser, runner, reconciler: null, widget: null },
+    } as unknown as ExtensionState;
+    expect(healEngineSessions(state)).toBe(true);
+    expect(loser.sessionGuid).toBe(winner.sessionGuid);
+    expect(loser.epoch).toBe(winner.epoch);
+    // Second heal is quiet success, not perpetual failure.
+    expect(healEngineSessions(state)).toBe(true);
+  });
+
+  it("spawnJob proceeds under the resynced identity after takeover", () => {
+    const runner = fakeRunnerWindows();
+    const root = freshRoot();
+    const { loser, winner } = takeover(root, "pi-resync-spawn", runner);
+    const job = spawnJob({
+      session: loser,
+      runner,
+      tmuxBinary: "tmux",
+      command: "exit 0",
+      cwd: tmpdir(),
+      envDenylist: [],
+      windowName: "bg-test",
+    });
+    expect(job.windowId).toMatch(/^@\d+$/);
+    // The window landed in the live (winner-tagged) session.
+    const rec = readJsonFile<{ windowId: string }>(join(loser.spoolDir, "jobs", `${job.jobId}.json`));
+    expect(rec?.windowId).toBe(job.windowId);
+    expect(winner.sessionGuid).not.toBe(loser.sessionGuid);
+  });
+
+  it("spawnJob refuses a genuinely foreign session", () => {
+    const runner = fakeRunnerWindows();
+    const s = boot(freshRoot(), "pi-spawn-foreign", runner);
+    // Live guid matches neither memory nor disk: no resync can save us.
+    runner.sessions.get(`${s.socketName}//sess:${s.sessionName}`)!.set("@pi_guid", "foreign-guid");
+    expect(() => spawnJob({
+      session: s,
+      runner,
+      tmuxBinary: "tmux",
+      command: "exit 0",
+      cwd: tmpdir(),
+      envDenylist: [],
+      windowName: "bg-test",
+    })).toThrow(/refusing to spawn.*guid mismatch/);
   });
 });

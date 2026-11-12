@@ -1,6 +1,7 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { finishedRowSegments, overflowSegments, formatAge } from "../engine/grammar";
 import { readLastLine } from "../engine/log-tail";
+import { isJobTerminal } from "../engine/jobs";
 import { resolveDisplayName } from "../engine/grammar";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
@@ -122,9 +123,20 @@ export class JobsWidget {
 
   private backgroundedJobs(): BackgroundJob[] {
     // Backgrounded only: foreground runs are visible in their own call rows.
-    return [...this.state.backgroundJobs.values()]
+    const jobs = [...this.state.backgroundJobs.values()]
       .filter((job) => job.backgrounded === true)
       .sort((a, b) => a.startedAt - b.startedAt);
+    // The registry is memory-only and desyncs across restarts/takeovers:
+    // rows for journal-terminal jobs would spin here forever. The journal
+    // is truth — prune what it already closed. Registry-only change:
+    // journals and tmux are untouched. Unreadable journals stay visible
+    // (fail visible, never hide) as do rows without a spool marker.
+    return jobs.filter((job) => {
+      const spoolDir = job.engine?.spoolDir;
+      if (!spoolDir || !isJobTerminal(spoolDir, job.jobId)) return true;
+      this.state.backgroundJobs.delete(job.jobId);
+      return false;
+    });
   }
 
   private isEmpty(): boolean {

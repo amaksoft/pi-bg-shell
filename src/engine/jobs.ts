@@ -5,7 +5,7 @@ import { formatEnvironmentExportsForBash, shellQuote } from "../tmux-utils";
 import { jobJsonPath, jobsDir, sessionJsonPath, sessionLockPath } from "./naming";
 import { isOwnerDead, readOwner } from "./owner-lock";
 import type { Runner, Session } from "./session";
-import { GUID_OPTION, ensureLiveSession } from "./session";
+import { GUID_OPTION, ensureLiveSession, readLiveSessionGuid, resyncSessionFromDisk } from "./session";
 
 /** Per-window job tag, read back to translate live @ids to jobIds. */
 export const JOB_ID_OPTION = "@pi_job_id";
@@ -16,6 +16,25 @@ import { atomicWriteJson, ensureDir, readJsonFile, type JobRecord, type SessionR
  * code, output tees to the spool log; exit file
  * <spoolDir>/jobs/<jobId>.exit, log <jobId>.exit.out.
  */
+
+/**
+ * Single source of truth for job liveness: the journal. A row is live
+ * iff its record exists and says running. Every display, delivery, and
+ * fencing decision derives from this — never from memory alone
+ * (registries desync across restarts/takeovers; the journal does not).
+ */
+export const isJobRecordLive = (record: JobRecord | undefined): boolean =>
+  !!record && record.status === "running";
+
+/**
+ * Dir-scoped liveness for display paths (widget, footer): terminal when
+ * the journal exists and says anything but running. Unreadable journals
+ * are NOT terminal — inconclusive reads fail visible, never hide.
+ */
+export const isJobTerminal = (spoolDir: string, jobId: string): boolean => {
+  const record = readJsonFile<JobRecord>(jobJsonPath(spoolDir, jobId));
+  return !!record && !isJobRecordLive(record);
+};
 
 export const JOB_ID_RE = /^[0-9a-f]{6}$/;
 
@@ -85,7 +104,24 @@ export const spawnJob = (
   params: SpawnParams,
   taken?: (id: string) => boolean,
 ): { jobId: string; windowId: string; exitFile: string; logFile: string } => {
-  const { session, runner } = params;
+  const { runner } = params;
+  // Identity fence (heal counterpart): never open a window on a session
+  // whose live guid isn't ours. A stale loser (takeover moved the epoch)
+  // resyncs to disk and proceeds under the current identity; genuine
+  // foreignness throws instead of injecting a window into someone else's
+  // session. An absent/unverifiable session falls through to the recreate
+  // path below, which re-verifies before retrying.
+  let session = params.session;
+  const liveGuid = readLiveSessionGuid(session, runner);
+  if (liveGuid !== undefined && liveGuid !== session.sessionGuid) {
+    const resynced = resyncSessionFromDisk(session);
+    if (!resynced.moved || resynced.session.sessionGuid !== liveGuid) {
+      throw new Error(
+        `refusing to spawn: foreign session owns ${session.sessionName} (guid mismatch)`,
+      );
+    }
+    session = resynced.session;
+  }
   const jobId = mintJobId(taken);
   ensureDir(jobsDir(session.spoolDir));
   const { scriptPath, exitFile, logFile } = buildCommandScript({
@@ -317,7 +353,7 @@ export const killGuarded = (
   // was not deliberate).
   const record = readJsonFile<JobRecord>(jobJsonPath(session.spoolDir, job.jobId));
   const wasSeen = record?.seen === true;
-  if (record && record.status === "running") {
+  if (isJobRecordLive(record)) {
     record.status = "killed";
     record.seen = true;
     atomicWriteJson(jobJsonPath(session.spoolDir, job.jobId), record);
@@ -423,7 +459,7 @@ export const consumeCompletion = (
   jobId: string,
 ): Completion | undefined => {
   const record = readJsonFile<JobRecord>(jobJsonPath(session.spoolDir, jobId));
-  if (!record || record.status !== "running") return undefined;
+  if (!isJobRecordLive(record)) return undefined;
   const consumed = `${record.exitFile}.consumed`;
   const source = existsSync(record.exitFile) ? record.exitFile : existsSync(consumed) ? consumed : undefined;
   if (!source) return undefined;
@@ -448,7 +484,7 @@ export const consumeCompletion = (
 /** S6 local-only foreground claim: set before blocking, cleared on demote/exit. */
 export const setForegroundClaim = (spoolDir: string, jobId: string): boolean => {
   const record = readJsonFile<JobRecord>(jobJsonPath(spoolDir, jobId));
-  if (!record || record.status !== "running") return false;
+  if (!isJobRecordLive(record)) return false;
   record.foregroundClaim = true;
   record.claimHeartbeatAt = new Date().toISOString();
   atomicWriteJson(jobJsonPath(spoolDir, jobId), record);

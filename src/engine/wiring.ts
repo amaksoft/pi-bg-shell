@@ -49,9 +49,9 @@ import { consumeCompletion, killGuarded, markJobNotified, peekJob, spawnJob, wai
 import { jobJsonPath } from "./naming";
 import { atomicWriteJson, readJsonFile, type JobRecord } from "./sidecar";
 import type { CompletionItem, JobSnapshot } from "./reconciler";
-import { clearForegroundClaim, refreshForegroundClaim, setForegroundClaim } from "./jobs";
+import { clearForegroundClaim, isJobRecordLive, refreshForegroundClaim, setForegroundClaim } from "./jobs";
 import type { Runner, Session } from "./session";
-import { ensureLiveSession } from "./session";
+import { ensureLiveSession, resyncSessionFromDisk } from "./session";
 import type { WaitResult } from "./jobs";
 
 /**
@@ -88,6 +88,23 @@ export const healEngineSessions = (state: ExtensionState): boolean => {
       if (result.ok && result.recovered) {
         console.log(`[pi-bg-shell] session died (${target.label}); recreated without restart.`);
       } else if (!result.ok) {
+        // Takeover moved the identity under us (duplicate pi, same pi id):
+        // adopt the on-disk epoch/guid and retry once instead of wedging
+        // on every turn with a stale guid. The Session object is mutated in
+        // place so the engine, adopted map, and reconciler watch converge.
+        // Genuine foreignness (disk matches us but live differs) still
+        // fails closed below.
+        const resynced = resyncSessionFromDisk(target.session);
+        if (resynced.moved) {
+          Object.assign(target.session, resynced.session);
+          const retry = ensureLiveSession(target.session, owned.runner);
+          if (retry.ok) {
+            console.log(
+              `[pi-bg-shell] session identity moved (${target.label}); resynced to epoch ${resynced.session.epoch}${retry.recovered ? " and recreated" : ""}.`,
+            );
+            continue;
+          }
+        }
         console.log(`[pi-bg-shell] session recovery failed (${target.label}): ${result.reason}`);
         healthy = false;
       }
@@ -788,7 +805,7 @@ export const listTasks = (state: ExtensionState): TaskRow[] => {
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
       const record = readJsonFile<JobRecord>(`${spoolDir}/jobs/${file}`);
-      if (!record || record.status !== "running") continue;
+      if (!isJobRecordLive(record)) continue;
       rows.push({
         jobId: record.jobId,
         windowId: record.windowId,
@@ -820,7 +837,7 @@ export const peekTask = (state: ExtensionState, jobId: string, contextLines: num
   // the pending completion ping never fires for already-seen output.
   // Shadows show the live pane (not a final outcome) and delivered rows
   // need no latch — both skip.
-  if (record.status === "running" && existsSync(record.exitFile)) {
+  if (isJobRecordLive(record) && existsSync(record.exitFile)) {
     markJobNotified(target.session, jobId);
   }
   const text = peekJob(

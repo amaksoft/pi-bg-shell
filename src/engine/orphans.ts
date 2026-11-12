@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ResolvedOptions } from "../config";
 import type { ExtensionState } from "./types";
 import { deliverCompletions, syncJobToState } from "./wiring";
+import { isJobRecordLive } from "./jobs";
 import { acquireOwnerLock, isOwnerDead, readOwner, releaseOwnerLock } from "./owner-lock";
 import { atomicWriteJson, readJsonFile, type JobRecord, type SessionRecord } from "./sidecar";
 import { jobJsonPath, jobsDir, sessionJsonPath, sessionLockPath } from "./naming";
@@ -55,7 +56,7 @@ export const scanOrphanDirs = (
       for (const file of readdirSync(jobsDir(spoolDir))) {
         if (!file.endsWith(".json")) continue;
         const job = readJsonFile<JobRecord>(join(jobsDir(spoolDir), file));
-        if (!job || job.status !== "running") continue;
+        if (!isJobRecordLive(job)) continue;
         if (existsSync(job.exitFile) || existsSync(`${job.exitFile}.consumed`)) pendingCompleted += 1;
         else running += 1;
       }
@@ -154,7 +155,7 @@ export const adoptOrphanDir = (
   if (death) {
     for (const jobId of pendingJobIds(spoolDir)) {
       const job = readJsonFile<JobRecord>(jobJsonPath(spoolDir, jobId));
-      if (!job || job.status !== "running") continue;
+      if (!isJobRecordLive(job)) continue;
       if (existsSync(job.exitFile) || existsSync(`${job.exitFile}.consumed`)) continue; // tick will consume
       job.status = "killed";
       atomicWriteJson(jobJsonPath(spoolDir, jobId), job);
@@ -180,7 +181,7 @@ export const adoptOrphanDir = (
   owned.adopted.set(spoolDir, { session: foreign, ownerNonce: acquired.owner.nonce });
   for (const jobId of pendingJobIds(spoolDir)) {
     const job = readJsonFile<JobRecord>(jobJsonPath(spoolDir, jobId));
-    if (job?.status === "running") result.stillRunning.push(jobId);
+    if (isJobRecordLive(job)) result.stillRunning.push(jobId);
   }
   persistAdoptedDir(owned.session.spoolDir, spoolDir);
   state.engine?.widget?.poke();

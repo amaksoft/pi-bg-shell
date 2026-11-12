@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, renameSync, statSync, utimesSync
 import { join } from "node:path";
 import { readOwner, refreshOwnerLock } from "./owner-lock";
 import { sessionJsonPath, sessionLockPath } from "./naming";
-import { consumeCompletion } from "./jobs";
+import { consumeCompletion, isJobRecordLive } from "./jobs";
 import { readByteSlice, readByteTail } from "./log-tail";
 import { jobJsonPath, jobsDir } from "./naming";
 import { atomicWriteJson, readJsonFile, type JobRecord, type SessionRecord } from "./sidecar";
@@ -366,7 +366,7 @@ export class Reconciler {
     const stealAfterMs = claimStealAfterMs(this.options.minimumPollIntervalSeconds);
     for (const jobId of jobIds) {
       const record = readJsonFile<JobRecord>(jobJsonPath(session.spoolDir, jobId));
-      if (!record || record.status !== "running") continue;
+      if (!isJobRecordLive(record)) continue;
       if (record.foregroundClaim && !isClaimStale(record, stealAfterMs)) continue;
       if (record.foregroundClaim && isClaimStale(record, stealAfterMs)) {
         record.foregroundClaim = false;
@@ -496,7 +496,7 @@ export class Reconciler {
       this.stalls.delete(key);
       return { kind: "skip" };
     }
-    if (record.status !== "running") {
+    if (!isJobRecordLive(record)) {
       this.cursors.delete(key);
       this.stalls.delete(key);
       return { kind: "skip" };

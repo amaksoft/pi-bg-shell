@@ -107,10 +107,12 @@ const deadPlaceholder = (): OwnerInfo => ({
 });
 
 /**
- * Dead-owner test: fresh heartbeat means alive, full stop. A stale (or
- * unreadable) heartbeat means dead UNLESS signal 0 proves the recorded pid
- * is still alive — that combination reads as scheduler-stalled, not dead.
- * Unprovable states (ESRCH-dead aside) defer to the heartbeat verdict.
+ * Dead-owner test: a stale (or unreadable) heartbeat means dead UNLESS
+ * signal 0 proves the recorded pid is still alive — that combination reads
+ * as scheduler-stalled, not dead. A provably-dead pid (ESRCH) means dead
+ * even with a FRESH heartbeat: a dead owner cannot be stalled, only gone,
+ * so a crash seconds ago must not block resume for the full stale window.
+ * Unprovable states defer to the heartbeat verdict.
  */
 export const isOwnerDead = (
   lockDir: string,
@@ -118,9 +120,25 @@ export const isOwnerDead = (
   staleAfterMs: number,
 ): boolean => {
   const age = heartbeatAgeMs(lockDir);
-  if (age !== null && age < staleAfterMs) return false;
+  if (age !== null && age < staleAfterMs) {
+    if (owner.pid !== undefined && owner.pid > 0 && pidDead(owner.pid)) return true;
+    return false;
+  }
   if (owner.pid !== undefined && owner.pid > 0 && pidAlive(owner.pid)) return false;
   return true;
+};
+
+/**
+ * Provably-dead pid: signal 0 throws ESRCH (no such process). Success,
+ * EPERM, and any other error mean "not proven dead" — fail toward alive.
+ */
+const pidDead = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
 };
 
 /** Best-effort aliveness: signal 0 success or EPERM means a live process. */

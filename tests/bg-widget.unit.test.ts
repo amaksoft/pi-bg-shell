@@ -1,7 +1,9 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { jobJsonPath } from "../src/engine/naming";
+import { atomicWriteJson } from "../src/engine/sidecar";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { createState } from "../src/runtime";
@@ -140,5 +142,89 @@ describe("jobs widget slots", () => {
     expect(lines.some((l) => l.includes("<dim>") && l.includes("exit 0"))).toBe(true);
     expect(lines.some((l) => l.includes("<error>") && l.includes("exit 1"))).toBe(true);
     expect(lines.some((l) => l.includes("<warning>"))).toBe(false);
+  });
+});
+
+describe("jobs widget registry/journal reconciliation", () => {
+  const renderOf = (widget: JobsWidget) =>
+    (widget as unknown as { render: (theme: Theme, width: number) => string[] }).render.bind(widget);
+
+  const writeJournal = (spoolDir: string, id: string, status: "running" | "completed" | "killed") => {
+    mkdirSync(join(spoolDir, "jobs"), { recursive: true });
+    atomicWriteJson(jobJsonPath(spoolDir, id), {
+      jobId: id,
+      windowId: "@9",
+      command: "sleep 90",
+      startedAt: Date.now() - 3600000,
+      spoolLog: join(spoolDir, `${id}.out`),
+      exitFile: join(spoolDir, "jobs", `${id}.exit`),
+      foregroundClaim: false,
+      status,
+      seen: false,
+    });
+  };
+
+  it("prunes registry rows the journal already closed (restart fossils)", () => {
+    const root = freshRoot();
+    const state = createState();
+    addJob(state, root, "fossil1", "sleep 90", "tail line\n");
+    writeJournal(root, "fossil1", "completed");
+    const widget = new JobsWidget(state);
+    expect(renderOf(widget)(theme, 80)).toEqual([]);
+    // Pruned from the registry too, so footer status converges as well.
+    expect(state.backgroundJobs.has("fossil1")).toBe(false);
+  });
+
+  it("keeps rows whose journal still says running", () => {
+    const root = freshRoot();
+    const state = createState();
+    addJob(state, root, "live0001", "sleep 90", "working\n");
+    writeJournal(root, "live0001", "running");
+    const widget = new JobsWidget(state);
+    const lines = renderOf(widget)(theme, 80).join("\n");
+    expect(lines).toContain("live0001");
+    expect(state.backgroundJobs.has("live0001")).toBe(true);
+  });
+
+  it("keeps rows with unreadable journals (fail visible, never hide)", () => {
+    const root = freshRoot();
+    const state = createState();
+    addJob(state, root, "nojourn", "sleep 90", "working\n");
+    // No journal file at all: inconclusive, stays visible.
+    const widget = new JobsWidget(state);
+    expect(renderOf(widget)(theme, 80).join("\n")).toContain("nojourn");
+    expect(state.backgroundJobs.has("nojourn")).toBe(true);
+  });
+
+  it("prunes killed rows as well as completed ones", () => {
+    const root = freshRoot();
+    const state = createState();
+    addJob(state, root, "killed1", "sleep 90");
+    writeJournal(root, "killed1", "killed");
+    const widget = new JobsWidget(state);
+    expect(renderOf(widget)(theme, 80)).toEqual([]);
+    expect(state.backgroundJobs.has("killed1")).toBe(false);
+  });
+});
+
+describe("job liveness single source of truth", () => {
+  it("isJobTerminal follows the journal, failing visible on unreadable", async () => {
+    const { isJobRecordLive, isJobTerminal } = await import("../src/engine/jobs");
+    expect(isJobRecordLive(undefined)).toBe(false);
+    expect(isJobRecordLive({ status: "running" } as never)).toBe(true);
+    expect(isJobRecordLive({ status: "completed" } as never)).toBe(false);
+    const root = freshRoot();
+    expect(isJobTerminal(root, "missing")).toBe(false);
+    mkdirSync(join(root, "jobs"), { recursive: true });
+    atomicWriteJson(jobJsonPath(root, "run1"), {
+      jobId: "run1", windowId: "@1", command: "x", startedAt: 0,
+      spoolLog: "l", exitFile: "e", foregroundClaim: false, status: "running", seen: false,
+    });
+    expect(isJobTerminal(root, "run1")).toBe(false);
+    atomicWriteJson(jobJsonPath(root, "run1"), {
+      jobId: "run1", windowId: "@1", command: "x", startedAt: 0,
+      spoolLog: "l", exitFile: "e", foregroundClaim: false, status: "killed", seen: false,
+    });
+    expect(isJobTerminal(root, "run1")).toBe(true);
   });
 });
